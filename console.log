@@ -1,0 +1,6 @@
+console.log('ENV keys:', {
+  PORT: process.env.PORT,
+  FRONTEND_ORIGIN: process.env.FRONTEND_ORIGIN,
+  RAZORPAY_KEY_ID: process.env.RAZORPAY_KEY_ID ? 'SET' : 'MISSING',
+  RAZORPAY_KEY_SECRET: process.env.RAZORPAY_KEY_SECRET ? 'SET' : 'MISSING',
+});
