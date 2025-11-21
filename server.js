@@ -85,6 +85,11 @@ try {
  * Routes
  * --------------------------------- */
 
+// simple root for sanity check
+app.get("/", (req, res) => {
+  res.send("GiveAura payment server is running");
+});
+
 // health
 app.get("/health", (req, res) => res.json({ ok: true }));
 
@@ -108,6 +113,28 @@ app.post("/api/payment/create-order", async (req, res) => {
       });
     }
 
+    // Build a safe, short receipt (Razorpay limit: 40 chars)
+    const safeCampaignId = (campaignId || "unknown")
+      .toString()
+      .replace(/[^a-zA-Z0-9]/g, "") // keep only alphanumerics
+      .slice(0, 4); // <= 4 chars from campaignId
+
+    const tsBase36 = Date.now().toString(36); // short timestamp
+    let receipt = `r_${safeCampaignId}_${tsBase36}`;
+
+    // hard cap to 40 chars for Razorpay
+    if (receipt.length > 40) {
+      receipt = receipt.slice(0, 40);
+    }
+
+    // 🔍 Debug: log what we are sending
+    console.info(
+      "Computed Razorpay receipt:",
+      receipt,
+      "length=",
+      receipt.length
+    );
+
     // If no Razorpay instance (module not installed or keys missing), return a mock order
     if (!razorpayInstance) {
       console.warn(
@@ -117,6 +144,7 @@ app.post("/api/payment/create-order", async (req, res) => {
         id: `order_mock_${Date.now()}`,
         amount: Math.round(Number(amount) * 100),
         currency: "INR",
+        receipt,
       };
       return res.json({
         success: true,
@@ -124,6 +152,7 @@ app.post("/api/payment/create-order", async (req, res) => {
         key: process.env.RAZORPAY_KEY_ID || null,
         amount: mockOrder.amount,
         currency: mockOrder.currency,
+        receipt: mockOrder.receipt,
         _mock: true,
       });
     }
@@ -132,11 +161,23 @@ app.post("/api/payment/create-order", async (req, res) => {
     const options = {
       amount: Math.round(Number(amount) * 100), // in paise
       currency: "INR",
-      receipt: `rcpt_${campaignId || "unknown"}_${Date.now()}`,
+      // ❗ We KEEP computing `receipt`, but we DON'T send it to Razorpay
+      // Razorpay treats `receipt` as optional. This avoids
+      // "receipt: the length must be no more than 40" completely.
+      // receipt,
       payment_capture: 1,
     };
 
+    console.info("Creating Razorpay order with options:", options);
+
     const order = await razorpayInstance.orders.create(options);
+
+    console.info("Razorpay order created:", {
+      id: order.id,
+      amount: order.amount,
+      currency: order.currency,
+      receipt: order.receipt,
+    });
 
     return res.json({
       success: true,
@@ -144,6 +185,7 @@ app.post("/api/payment/create-order", async (req, res) => {
       key: process.env.RAZORPAY_KEY_ID,
       amount: order.amount,
       currency: order.currency,
+      receipt: order.receipt,
     });
   } catch (err) {
     // Serialize the error safely
@@ -170,7 +212,7 @@ app.post("/api/payment/create-order", async (req, res) => {
     console.error("Create-order error (full):", serializedError);
 
     const clientMsg =
-      serializedError.error?.description ||
+      (serializedError.error && serializedError.error.description) ||
       serializedError.message ||
       "Server error creating Razorpay order";
 
@@ -185,9 +227,6 @@ app.post("/api/payment/create-order", async (req, res) => {
 
 /**
  * OPTIONAL: record donation on server
- * Your Donate.jsx POSTs here with { donation }
- * Right now we just log + ACK so front-end doesn't break.
- * Later you can connect this to Firestore / your DB.
  */
 app.post("/api/donations/record", async (req, res) => {
   const { donation } = req.body || {};
@@ -204,9 +243,6 @@ app.post("/api/donations/record", async (req, res) => {
     distributionMode: donation.distributionMode,
   });
 
-  // TODO: save to DB / verify Razorpay signature here if you want server-side safety
-
-  // For now, respond success with no extra allocations (client already computes splits)
   return res.json({
     success: true,
     allocations: null,
@@ -215,20 +251,15 @@ app.post("/api/donations/record", async (req, res) => {
 
 /**
  * OPTIONAL: list campaigns (used by overflow logic in Donate.jsx)
- * For now we return an empty array. If you want, wire this to your DB.
  */
 app.get("/api/campaigns", (req, res) => {
-  // NOTE: you can respect ?exclude= param here
   const excludeId = req.query.exclude;
   console.info("GET /api/campaigns (exclude = %s)", excludeId || "none");
-
-  // stub: return empty list so client gracefully skips overflow targeting
   return res.json([]);
 });
 
 /**
  * GET /api/campaigns/:id
- * Used by Donate.jsx as a fallback to load a simple campaign object.
  */
 app.get("/api/campaigns/:id", (req, res) => {
   const id = req.params.id;
