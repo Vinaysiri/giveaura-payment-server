@@ -6,6 +6,15 @@ const cors = require("cors");
 const app = express();
 app.use(express.json());
 
+const crypto = require("crypto");
+const admin = require("firebase-admin");
+
+if (!admin.apps.length) {
+  admin.initializeApp({
+    credential: admin.credential.applicationDefault(),
+  });
+}
+
 // Print env for debugging (do NOT keep verbose logs forever in prod)
 console.info("ENV:", {
   PORT: process.env.PORT || "(default 5000)",
@@ -360,48 +369,6 @@ app.get("/api/campaigns/:id", (req, res) => {
   });
 });
 
-/* ---------------------------------
- * Server listen
- * --------------------------------- */
-
-const PORT = Number(process.env.PORT) || 5000;
-const server = app.listen(PORT, () =>
-  console.log(`Payment server listening on http://localhost:${PORT}`)
-);
-
-server.on("error", (err) => {
-  if (err && err.code === "EADDRINUSE") {
-    console.error(
-      `Port ${PORT} is already in use. Kill the process using that port or change PORT in your .env.`
-    );
-  } else {
-    console.error("Server error:", err);
-  }
-});
-
-process.on("unhandledRejection", (reason) => {
-  console.error(
-    "Unhandled Rejection:",
-    reason && (reason.stack || reason.toString())
-  );
-});
-process.on("uncaughtException", (err) => {
-  console.error(
-    "Uncaught Exception:",
-    err && (err.stack || err.toString())
-  );
-});
-
-const crypto = require("crypto");
-const admin = require("firebase-admin");
-
-// init firebase admin once
-if (!admin.apps.length) {
-  admin.initializeApp({
-    credential: admin.credential.applicationDefault(),
-  });
-}
-
 app.post("/api/payment/confirm", async (req, res) => {
   try {
     const {
@@ -463,3 +430,38 @@ app.post("/api/payment/confirm", async (req, res) => {
     return res.status(500).json({ success: false, message: "Confirm failed" });
   }
 });
+
+
+/* ---------------------------------
+ * Server listen
+ * --------------------------------- */
+
+const PORT = Number(process.env.PORT) || 5000;
+const server = app.listen(PORT, () =>
+  console.log(`Payment server listening on http://localhost:${PORT}`)
+);
+
+server.on("error", (err) => {
+  if (err && err.code === "EADDRINUSE") {
+    console.error(
+      `Port ${PORT} is already in use. Kill the process using that port or change PORT in your .env.`
+    );
+  } else {
+    console.error("Server error:", err);
+  }
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error(
+    "Unhandled Rejection:",
+    reason && (reason.stack || reason.toString())
+  );
+});
+process.on("uncaughtException", (err) => {
+  console.error(
+    "Uncaught Exception:",
+    err && (err.stack || err.toString())
+  );
+});
+
+
