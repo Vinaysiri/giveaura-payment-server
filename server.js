@@ -212,32 +212,37 @@ app.post("/api/payment/confirm", async (req, res) => {
     const donationId = `don_${Date.now()}`;
 
     await db.runTransaction(async (tx) => {
-      const campaignRef = db.collection("campaigns").doc(campaignId);
-      const snap = await tx.get(campaignRef);
+  const campaignRef = db.collection("campaigns").doc(campaignId);
+  const snap = await tx.get(campaignRef);
 
-      if (!snap.exists) {
-        throw new Error("Campaign not found");
-      }
+  if (!snap.exists) {
+    throw new Error("Campaign not found");
+  }
 
-      const currentRaised = Number(snap.data().fundsRaised || 0);
+  const previousRaised = Number(snap.data().fundsRaised || 0);
+  const donationAmount = Number(amount);
 
-      // Add donation
-      tx.set(campaignRef.collection("donations").doc(donationId), {
-        donationId,
-        campaignId,
-        amount: Number(amount),
-        paymentId,
-        orderId,
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        source: "render-confirm",
-      });
+  // 1️⃣ Save donation
+  tx.set(
+    campaignRef.collection("donations").doc(donationId),
+    {
+      donationId,
+      campaignId,
+      amount: donationAmount,
+      paymentId,
+      orderId,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      source: "razorpay-confirm",
+    }
+  );
 
-      // Update campaign total
-      tx.update(campaignRef, {
-        fundsRaised: currentRaised + Number(amount),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
-    });
+  // 2️⃣ UPDATE CAMPAIGN TOTAL (THIS WAS THE FIX)
+  tx.update(campaignRef, {
+    fundsRaised: previousRaised + donationAmount,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+});
+
 
     return res.json({ success: true, donationId });
   } catch (err) {
