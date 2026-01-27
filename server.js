@@ -1,19 +1,53 @@
 require("dotenv").config();
 const express = require("express");
-const cors = require("cors");
 const crypto = require("crypto");
 
 const app = express();
 
-/* --------------------------------------------------
+/* ======================================================
  * BASIC MIDDLEWARE
- * -------------------------------------------------- */
+ * ====================================================== */
 
 app.use(express.json({ limit: "1mb" }));
 
-/* --------------------------------------------------
- * OPTIONAL FIREBASE ADMIN (🔥 SAFE FIX)
- * -------------------------------------------------- */
+/* ======================================================
+ * CORS — HARD FIX (NO cors() PACKAGE)
+ * ====================================================== */
+
+const ALLOWED_ORIGINS = [
+  "https://fundraiser-donations.web.app",
+  "https://fundraiser-donations.firebaseapp.com",
+  "http://localhost:5173",
+  "http://localhost:3000",
+];
+
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+
+  if (ALLOWED_ORIGINS.includes(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+  }
+
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type, Authorization"
+  );
+  res.setHeader(
+    "Access-Control-Allow-Methods",
+    "GET, POST, OPTIONS"
+  );
+  res.setHeader("Access-Control-Allow-Credentials", "true");
+
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(204);
+  }
+
+  next();
+});
+
+/* ======================================================
+ * OPTIONAL FIREBASE ADMIN (SAFE)
+ * ====================================================== */
 
 let admin = null;
 let firestoreEnabled = false;
@@ -28,62 +62,27 @@ try {
   }
 
   firestoreEnabled = true;
-  console.log("✅ firebase-admin loaded & initialized");
+  console.log("✅ firebase-admin initialized");
 } catch (err) {
   console.warn("⚠️ firebase-admin NOT available");
-  console.warn("⚠️ Firestore writes are DISABLED");
-  console.warn(err.message);
+  console.warn("⚠️ Firestore writes DISABLED");
 }
 
-/* --------------------------------------------------
- * ENV LOG
- * -------------------------------------------------- */
+/* ======================================================
+ * ENV LOG (SAFE)
+ * ====================================================== */
 
-console.log("[BOOT] Payment server starting…");
+console.log("[BOOT] Payment server starting");
 console.log("[ENV]", {
   PORT: process.env.PORT || 5000,
-  FRONTEND_ORIGIN: process.env.FRONTEND_ORIGIN || "(not set)",
+  FIRESTORE: firestoreEnabled,
   RAZORPAY_KEY_ID: !!process.env.RAZORPAY_KEY_ID,
   RAZORPAY_KEY_SECRET: !!process.env.RAZORPAY_KEY_SECRET,
 });
 
-/* --------------------------------------------------
- * CORS
- * -------------------------------------------------- */
-
-const allowedOrigins = [
-  "http://localhost:5173",
-  "http://localhost:4173",
-  "http://localhost:3000",
-  "https://fundraiser-donations.web.app",
-  "https://fundraiser-donations.firebaseapp.com",
-];
-
-app.use(
-  cors({
-    origin: function (origin, callback) {
-      // allow server-to-server or curl/postman
-      if (!origin) return callback(null, true);
-
-      if (allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-
-      console.error("❌ CORS blocked origin:", origin);
-      return callback(new Error("Not allowed by CORS"));
-    },
-    credentials: true,
-    methods: ["GET", "POST", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  })
-);
-
-// VERY IMPORTANT
-app.options("*", cors());
-
-/* --------------------------------------------------
+/* ======================================================
  * RAZORPAY INIT
- * -------------------------------------------------- */
+ * ====================================================== */
 
 let razorpayInstance = null;
 
@@ -95,12 +94,12 @@ try {
   });
   console.log("✅ Razorpay initialized");
 } catch (err) {
-  console.warn("⚠️ Razorpay not available – mock mode enabled");
+  console.warn("⚠️ Razorpay NOT available (mock mode)");
 }
 
-/* --------------------------------------------------
+/* ======================================================
  * ROOT & HEALTH
- * -------------------------------------------------- */
+ * ====================================================== */
 
 app.get("/", (_req, res) => {
   res.send("GiveAura payment server running");
@@ -114,9 +113,9 @@ app.get("/health", (_req, res) => {
   });
 });
 
-/* --------------------------------------------------
+/* ======================================================
  * CREATE ORDER
- * -------------------------------------------------- */
+ * ====================================================== */
 
 app.post("/api/payment/create-order", async (req, res) => {
   try {
@@ -129,6 +128,7 @@ app.post("/api/payment/create-order", async (req, res) => {
       });
     }
 
+    // Mock mode (Razorpay not available)
     if (!razorpayInstance) {
       return res.json({
         success: true,
@@ -162,9 +162,9 @@ app.post("/api/payment/create-order", async (req, res) => {
   }
 });
 
-/* --------------------------------------------------
- * CONFIRM PAYMENT (RENDER SAFE)
- * -------------------------------------------------- */
+/* ======================================================
+ * CONFIRM PAYMENT — FINAL FIX
+ * ====================================================== */
 
 app.post("/api/payment/confirm", async (req, res) => {
   try {
@@ -177,6 +177,7 @@ app.post("/api/payment/confirm", async (req, res) => {
       });
     }
 
+    // Verify Razorpay signature
     const expected = crypto
       .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
       .update(`${orderId}|${paymentId}`)
@@ -189,9 +190,9 @@ app.post("/api/payment/confirm", async (req, res) => {
       });
     }
 
-    // 🔁 SAFE FALLBACK IF FIRESTORE NOT AVAILABLE
+    // Firestore disabled → still return success
     if (!firestoreEnabled) {
-      console.warn("⚠️ Firestore skipped (firebase-admin missing)");
+      console.warn("⚠️ Firestore skipped");
       return res.json({
         success: true,
         donationId: `don_mock_${Date.now()}`,
@@ -212,7 +213,10 @@ app.post("/api/payment/confirm", async (req, res) => {
       source: "render-confirm",
     });
 
-    return res.json({ success: true, donationId });
+    return res.json({
+      success: true,
+      donationId,
+    });
   } catch (err) {
     console.error("[CONFIRM ERROR]", err);
     return res.status(500).json({
@@ -222,9 +226,9 @@ app.post("/api/payment/confirm", async (req, res) => {
   }
 });
 
-/* --------------------------------------------------
- * START SERVER
- * -------------------------------------------------- */
+/* ======================================================
+ * START SERVER (RENDER SAFE)
+ * ====================================================== */
 
 const PORT = Number(process.env.PORT) || 5000;
 app.listen(PORT, () => {
