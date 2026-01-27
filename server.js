@@ -51,30 +51,34 @@ console.log("[ENV]", {
  * CORS
  * -------------------------------------------------- */
 
-const allowedOrigins = (
-  process.env.FRONTEND_ORIGIN
-    ? process.env.FRONTEND_ORIGIN.split(",")
-    : [
-        "http://localhost:5173",
-        "https://fundraiser-donations.web.app",
-        "https://fundraiser-donations.firebaseapp.com",
-      ]
-).map(o => o.trim());
+const allowedOrigins = [
+  "http://localhost:5173",
+  "http://localhost:4173",
+  "http://localhost:3000",
+  "https://fundraiser-donations.web.app",
+  "https://fundraiser-donations.firebaseapp.com",
+];
 
 app.use(
   cors({
-    origin(origin, cb) {
-      if (!origin || allowedOrigins.includes(origin)) {
-        return cb(null, true);
+    origin: function (origin, callback) {
+      // allow server-to-server or curl/postman
+      if (!origin) return callback(null, true);
+
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
       }
-      console.warn("[CORS BLOCKED]", origin);
-      cb(null, false);
+
+      console.error("❌ CORS blocked origin:", origin);
+      return callback(new Error("Not allowed by CORS"));
     },
+    credentials: true,
     methods: ["GET", "POST", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
 
+// VERY IMPORTANT
 app.options("*", cors());
 
 /* --------------------------------------------------
