@@ -11,7 +11,7 @@ const app = express();
 app.use(express.json({ limit: "1mb" }));
 
 /* ======================================================
- * CORS — HARD FIX (NO cors() PACKAGE)
+ * CORS — HARD FIX (NO cors PACKAGE)
  * ====================================================== */
 
 const ALLOWED_ORIGINS = [
@@ -46,7 +46,7 @@ app.use((req, res, next) => {
 });
 
 /* ======================================================
- * OPTIONAL FIREBASE ADMIN (SAFE)
+ * FIREBASE ADMIN (RENDER SAFE)
  * ====================================================== */
 
 let admin = null;
@@ -56,20 +56,32 @@ try {
   admin = require("firebase-admin");
 
   if (!admin.apps.length) {
-    admin.initializeApp({
-      credential: admin.credential.applicationDefault(),
-    });
+    // 🔑 Use service account JSON from ENV
+    if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+      const serviceAccount = JSON.parse(
+        process.env.FIREBASE_SERVICE_ACCOUNT
+      );
+
+      admin.initializeApp({
+        credential: admin.credential.cert(serviceAccount),
+      });
+    } else {
+      admin.initializeApp({
+        credential: admin.credential.applicationDefault(),
+      });
+    }
   }
 
   firestoreEnabled = true;
-  console.log("✅ firebase-admin initialized");
+  console.log("✅ Firebase Admin initialized");
 } catch (err) {
   console.warn("⚠️ firebase-admin NOT available");
   console.warn("⚠️ Firestore writes DISABLED");
+  console.warn(err.message);
 }
 
 /* ======================================================
- * ENV LOG (SAFE)
+ * ENV LOG
  * ====================================================== */
 
 console.log("[BOOT] Payment server starting");
@@ -93,7 +105,7 @@ try {
     key_secret: process.env.RAZORPAY_KEY_SECRET,
   });
   console.log("✅ Razorpay initialized");
-} catch (err) {
+} catch {
   console.warn("⚠️ Razorpay NOT available (mock mode)");
 }
 
@@ -128,7 +140,6 @@ app.post("/api/payment/create-order", async (req, res) => {
       });
     }
 
-    // Mock mode (Razorpay not available)
     if (!razorpayInstance) {
       return res.json({
         success: true,
@@ -163,21 +174,20 @@ app.post("/api/payment/create-order", async (req, res) => {
 });
 
 /* ======================================================
- * CONFIRM PAYMENT — FINAL FIX
+ * CONFIRM PAYMENT — 🔥 FINAL & CORRECT
  * ====================================================== */
 
 app.post("/api/payment/confirm", async (req, res) => {
   try {
     const { paymentId, orderId, signature, campaignId, amount } = req.body;
 
-    if (!paymentId || !orderId || !signature || !amount) {
+    if (!paymentId || !orderId || !signature || !campaignId || !amount) {
       return res.status(400).json({
         success: false,
         message: "Missing fields",
       });
     }
 
-    // Verify Razorpay signature
     const expected = crypto
       .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
       .update(`${orderId}|${paymentId}`)
@@ -190,9 +200,8 @@ app.post("/api/payment/confirm", async (req, res) => {
       });
     }
 
-    // Firestore disabled → still return success
+    // 🔁 Firestore fallback
     if (!firestoreEnabled) {
-      console.warn("⚠️ Firestore skipped");
       return res.json({
         success: true,
         donationId: `don_mock_${Date.now()}`,
@@ -203,20 +212,33 @@ app.post("/api/payment/confirm", async (req, res) => {
     const db = admin.firestore();
     const donationId = `don_${Date.now()}`;
 
-    await db.collection("donations").doc(donationId).set({
-      donationId,
-      campaignId: campaignId || null,
-      amount: Number(amount),
-      paymentId,
-      orderId,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      source: "render-confirm",
+    await db.runTransaction(async (tx) => {
+      const campaignRef = db.collection("campaigns").doc(campaignId);
+      const snap = await tx.get(campaignRef);
+
+      if (!snap.exists) {
+        throw new Error("Campaign not found");
+      }
+
+      const raised = Number(snap.data().fundsRaised || 0);
+
+      tx.set(campaignRef.collection("donations").doc(donationId), {
+        donationId,
+        campaignId,
+        amount: Number(amount),
+        paymentId,
+        orderId,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        source: "render-confirm",
+      });
+
+      tx.update(campaignRef, {
+        fundsRaised: raised + Number(amount),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
     });
 
-    return res.json({
-      success: true,
-      donationId,
-    });
+    return res.json({ success: true, donationId });
   } catch (err) {
     console.error("[CONFIRM ERROR]", err);
     return res.status(500).json({
@@ -227,7 +249,7 @@ app.post("/api/payment/confirm", async (req, res) => {
 });
 
 /* ======================================================
- * START SERVER (RENDER SAFE)
+ * START SERVER
  * ====================================================== */
 
 const PORT = Number(process.env.PORT) || 5000;
