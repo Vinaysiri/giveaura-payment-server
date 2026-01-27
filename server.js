@@ -18,10 +18,20 @@ app.use(express.json({ limit: "1mb" }));
  * -------------------------------------------------- */
 
 if (!admin.apps.length) {
-  admin.initializeApp({
-    credential: admin.credential.applicationDefault(),
-  });
+  try {
+    admin.initializeApp({
+      credential: admin.credential.applicationDefault(),
+    });
+    console.log("✅ Firebase Admin initialized");
+  } catch (err) {
+    console.warn(
+      "⚠️ Firebase Admin not initialized (missing credentials). " +
+      "Firestore writes will fail until credentials are provided."
+    );
+    console.warn(err.message);
+  }
 }
+
 
 /* --------------------------------------------------
  * ENV LOG (SAFE)
