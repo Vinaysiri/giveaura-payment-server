@@ -56,7 +56,6 @@ try {
   admin = require("firebase-admin");
 
   if (!admin.apps.length) {
-    // 🔑 Use service account JSON from ENV
     if (process.env.FIREBASE_SERVICE_ACCOUNT) {
       const serviceAccount = JSON.parse(
         process.env.FIREBASE_SERVICE_ACCOUNT
@@ -174,7 +173,7 @@ app.post("/api/payment/create-order", async (req, res) => {
 });
 
 /* ======================================================
- * CONFIRM PAYMENT — 🔥 FINAL & CORRECT
+ * CONFIRM PAYMENT — ✅ FINAL & CORRECT
  * ====================================================== */
 
 app.post("/api/payment/confirm", async (req, res) => {
@@ -188,6 +187,7 @@ app.post("/api/payment/confirm", async (req, res) => {
       });
     }
 
+    // Verify Razorpay signature
     const expected = crypto
       .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
       .update(`${orderId}|${paymentId}`)
@@ -200,12 +200,11 @@ app.post("/api/payment/confirm", async (req, res) => {
       });
     }
 
-    // 🔁 Firestore fallback
     if (!firestoreEnabled) {
       return res.json({
         success: true,
         donationId: `don_mock_${Date.now()}`,
-        _warning: "Firestore disabled",
+        warning: "Firestore disabled",
       });
     }
 
@@ -220,8 +219,9 @@ app.post("/api/payment/confirm", async (req, res) => {
         throw new Error("Campaign not found");
       }
 
-      const raised = Number(snap.data().fundsRaised || 0);
+      const currentRaised = Number(snap.data().fundsRaised || 0);
 
+      // Add donation
       tx.set(campaignRef.collection("donations").doc(donationId), {
         donationId,
         campaignId,
@@ -232,8 +232,9 @@ app.post("/api/payment/confirm", async (req, res) => {
         source: "render-confirm",
       });
 
+      // Update campaign total
       tx.update(campaignRef, {
-        fundsRaised: raised + Number(amount),
+        fundsRaised: currentRaised + Number(amount),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
     });
