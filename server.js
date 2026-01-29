@@ -46,47 +46,12 @@ app.use((req, res, next) => {
 });
 
 /* ======================================================
- * FIREBASE ADMIN (RENDER SAFE)
- * ====================================================== */
-
-let admin = null;
-let firestoreEnabled = false;
-
-try {
-  admin = require("firebase-admin");
-
-  if (!admin.apps.length) {
-    if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-      const serviceAccount = JSON.parse(
-        process.env.FIREBASE_SERVICE_ACCOUNT
-      );
-
-      admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount),
-      });
-    } else {
-      admin.initializeApp({
-        credential: admin.credential.applicationDefault(),
-      });
-    }
-  }
-
-  firestoreEnabled = true;
-  console.log("✅ Firebase Admin initialized");
-} catch (err) {
-  console.warn("⚠️ firebase-admin NOT available");
-  console.warn("⚠️ Firestore writes DISABLED");
-  console.warn(err.message);
-}
-
-/* ======================================================
  * ENV LOG
  * ====================================================== */
 
 console.log("[BOOT] Payment server starting");
 console.log("[ENV]", {
   PORT: process.env.PORT || 5000,
-  FIRESTORE: firestoreEnabled,
   RAZORPAY_KEY_ID: !!process.env.RAZORPAY_KEY_ID,
   RAZORPAY_KEY_SECRET: !!process.env.RAZORPAY_KEY_SECRET,
 });
@@ -119,18 +84,18 @@ app.get("/", (_req, res) => {
 app.get("/health", (_req, res) => {
   res.json({
     ok: true,
-    firestoreEnabled,
     ts: Date.now(),
   });
 });
 
 /* ======================================================
- * CREATE ORDER
+ * CREATE ORDER (ONLY REQUIRED PAYMENT ENDPOINT)
  * ====================================================== */
 
 app.post("/api/payment/create-order", async (req, res) => {
   try {
-    const { amount } = req.body;
+    const { amount, campaignId = null, purpose = "donation", meta = {} } =
+      req.body;
 
     if (!amount || Number(amount) <= 0) {
       return res.status(400).json({
@@ -139,6 +104,14 @@ app.post("/api/payment/create-order", async (req, res) => {
       });
     }
 
+    if (purpose === "donation" && !campaignId) {
+      return res.status(400).json({
+        success: false,
+        message: "campaignId is required for donations",
+      });
+    }
+
+    // Mock mode (local / no Razorpay keys)
     if (!razorpayInstance) {
       return res.json({
         success: true,
@@ -151,8 +124,14 @@ app.post("/api/payment/create-order", async (req, res) => {
     }
 
     const order = await razorpayInstance.orders.create({
-      amount: Math.round(Number(amount) * 100),
+      amount: Math.round(Number(amount) * 100), // paise
       currency: "INR",
+      receipt: `rcpt_${Date.now()}`,
+      notes: {
+        campaignId,
+        purpose,
+        ...meta,
+      },
       payment_capture: 1,
     });
 
@@ -173,88 +152,41 @@ app.post("/api/payment/create-order", async (req, res) => {
 });
 
 /* ======================================================
- * CONFIRM PAYMENT — ✅ FINAL & CORRECT
+ * CONFIRM PAYMENT — DISABLED (OLD FLOW)
  * ====================================================== */
 
-app.post("/api/payment/confirm", async (req, res) => {
-  try {
-    const { paymentId, orderId, signature, campaignId, amount } = req.body;
+app.post("/api/payment/confirm", (_req, res) => {
+  return res.status(410).json({
+    success: false,
+    message:
+      "Payment confirmation is handled client-side via donateToCampaign().",
+  });
+});
 
-    if (!paymentId || !orderId || !signature || !campaignId || !amount) {
+/* ======================================================
+ * OPTIONAL: SIGNATURE VERIFICATION (SAFE, NO DB WRITE)
+ * ====================================================== */
+
+app.post("/api/payment/verify-signature", (req, res) => {
+  try {
+    const { paymentId, orderId, signature } = req.body;
+
+    if (!paymentId || !orderId || !signature) {
       return res.status(400).json({
-        success: false,
+        valid: false,
         message: "Missing fields",
       });
     }
 
-    // Verify Razorpay signature
     const expected = crypto
       .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
       .update(`${orderId}|${paymentId}`)
       .digest("hex");
 
-    if (expected !== signature) {
-      return res.status(401).json({
-        success: false,
-        message: "Invalid signature",
-      });
-    }
-
-    if (!firestoreEnabled) {
-      return res.json({
-        success: true,
-        donationId: `don_mock_${Date.now()}`,
-        warning: "Firestore disabled",
-      });
-    }
-
-    const db = admin.firestore();
-    const donationId = `don_${Date.now()}`;
-
-    await db.runTransaction(async (tx) => {
-  const campaignRef = db.collection("campaigns").doc(campaignId);
-  const snap = await tx.get(campaignRef);
-
-  if (!snap.exists) {
-    throw new Error("Campaign not found");
-  }
-
-  const previousRaised = Number(snap.data().fundsRaised || 0);
-  const donationAmount = Number(amount);
-
-  // 1️⃣ Save donation
-  tx.set(
-  campaignRef.collection("donations").doc(donationId),
-  {
-    donationId,
-    campaignId,
-    amount: donationAmount,
-    paymentId,
-    orderId,
-
-    // 🔥 FIX
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    createdAtMs: Date.now(),
-
-    source: "razorpay-confirm",
-  }
-);
-
-  // 2️⃣ UPDATE CAMPAIGN TOTAL (THIS WAS THE FIX)
-  tx.update(campaignRef, {
-    fundsRaised: previousRaised + donationAmount,
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-  });
-});
-
-
-    return res.json({ success: true, donationId });
+    return res.json({ valid: expected === signature });
   } catch (err) {
-    console.error("[CONFIRM ERROR]", err);
-    return res.status(500).json({
-      success: false,
-      message: "Payment confirmation failed",
-    });
+    console.error("[VERIFY SIGNATURE ERROR]", err);
+    return res.status(500).json({ valid: false });
   }
 });
 
