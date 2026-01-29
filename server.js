@@ -224,17 +224,21 @@ app.post("/api/payment/confirm", async (req, res) => {
 
   // 1️⃣ Save donation
   tx.set(
-    campaignRef.collection("donations").doc(donationId),
-    {
-      donationId,
-      campaignId,
-      amount: donationAmount,
-      paymentId,
-      orderId,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      source: "razorpay-confirm",
-    }
-  );
+  campaignRef.collection("donations").doc(donationId),
+  {
+    donationId,
+    campaignId,
+    amount: donationAmount,
+    paymentId,
+    orderId,
+
+    // 🔥 FIX
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    createdAtMs: Date.now(),
+
+    source: "razorpay-confirm",
+  }
+);
 
   // 2️⃣ UPDATE CAMPAIGN TOTAL (THIS WAS THE FIX)
   tx.update(campaignRef, {
