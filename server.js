@@ -94,6 +94,7 @@ app.get("/health", (_req, res) => {
 
 app.post("/api/payment/create-order", async (req, res) => {
   try {
+    console.log("🔥 CREATE-ORDER PAYLOAD:", req.body);
     const { amount, campaignId = null, purpose = "donation", meta = {} } =
       req.body;
 
