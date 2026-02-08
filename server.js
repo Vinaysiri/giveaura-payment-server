@@ -47,15 +47,15 @@ app.get("/", (_req, res) => res.send("GiveAura payment server running"));
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
 /* ======================================================
- * CREATE ORDER (DONATION + EVENT)
+ * CREATE ORDER (DONATION + EVENT) — FIXED
  * ====================================================== */
 app.post("/api/payment/create-order", async (req, res) => {
   try {
-    console.log("🔥 CREATE ORDER:", req.body);
+    console.log("🔥 CREATE ORDER PAYLOAD:", req.body);
 
     const {
       amount,
-      purpose = "donation",
+      purpose = "donation", // "donation" | "event"
       campaignId = null,
       meta = {},
     } = req.body || {};
@@ -63,17 +63,10 @@ app.post("/api/payment/create-order", async (req, res) => {
     const numericAmount = Number(amount);
 
     /* ---------- VALIDATION ---------- */
-    if (!numericAmount || numericAmount <= 0) {
+    if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
       return res.status(400).json({
         success: false,
         message: "Invalid amount",
-      });
-    }
-
-    if (purpose === "donation" && !campaignId) {
-      return res.status(400).json({
-        success: false,
-        message: "campaignId is required for donations",
       });
     }
 
@@ -84,6 +77,23 @@ app.post("/api/payment/create-order", async (req, res) => {
       });
     }
 
+    // campaignId is REQUIRED only for donations
+    if (purpose === "donation" && !campaignId) {
+      return res.status(400).json({
+        success: false,
+        message: "campaignId is required for donation payments",
+      });
+    }
+
+    // Razorpay env check
+    if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
+      console.error("❌ Razorpay keys missing in environment");
+      return res.status(500).json({
+        success: false,
+        message: "Payment gateway not configured",
+      });
+    }
+
     /* ---------- CREATE RAZORPAY ORDER ---------- */
     const order = await razorpay.orders.create({
       amount: Math.round(numericAmount * 100), // paise
@@ -91,7 +101,7 @@ app.post("/api/payment/create-order", async (req, res) => {
       payment_capture: 1,
       notes: {
         purpose,
-        campaignId,
+        ...(campaignId ? { campaignId } : {}),
         ...meta,
       },
     });
