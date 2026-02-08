@@ -1,19 +1,18 @@
 require("dotenv").config();
 const express = require("express");
 const crypto = require("crypto");
+const Razorpay = require("razorpay");
 
 const app = express();
 
 /* ======================================================
  * BASIC MIDDLEWARE
  * ====================================================== */
-
 app.use(express.json({ limit: "1mb" }));
 
 /* ======================================================
- * CORS — HARD FIX (NO cors PACKAGE)
+ * CORS
  * ====================================================== */
-
 const ALLOWED_ORIGINS = [
   "https://fundraiser-donations.web.app",
   "https://fundraiser-donations.firebaseapp.com",
@@ -23,275 +22,105 @@ const ALLOWED_ORIGINS = [
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-
   if (ALLOWED_ORIGINS.includes(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
   }
-
-  res.setHeader(
-    "Access-Control-Allow-Headers",
-    "Content-Type, Authorization"
-  );
-  res.setHeader(
-    "Access-Control-Allow-Methods",
-    "GET, POST, OPTIONS"
-  );
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Credentials", "true");
-
-  if (req.method === "OPTIONS") {
-    return res.sendStatus(204);
-  }
-
+  if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
-});
-
-/* ======================================================
- * ENV LOG
- * ====================================================== */
-
-console.log("[BOOT] Payment server starting");
-console.log("[ENV]", {
-  PORT: process.env.PORT || 5000,
-  RAZORPAY_KEY_ID: !!process.env.RAZORPAY_KEY_ID,
-  RAZORPAY_KEY_SECRET: !!process.env.RAZORPAY_KEY_SECRET,
 });
 
 /* ======================================================
  * RAZORPAY INIT
  * ====================================================== */
-
-let razorpayInstance = null;
-
-try {
-  const Razorpay = require("razorpay");
-  razorpayInstance = new Razorpay({
-    key_id: process.env.RAZORPAY_KEY_ID,
-    key_secret: process.env.RAZORPAY_KEY_SECRET,
-  });
-  console.log("✅ Razorpay initialized");
-} catch {
-  console.warn("⚠️ Razorpay NOT available (mock mode)");
-}
-
-/* ======================================================
- * ROOT & HEALTH
- * ====================================================== */
-
-app.get("/", (_req, res) => {
-  res.send("GiveAura payment server running");
-});
-
-app.get("/health", (_req, res) => {
-  res.json({
-    ok: true,
-    ts: Date.now(),
-  });
-});
-
-app.post("/api/events/create-booking-order", async (req, res) => {
-  try {
-    const { eventId, seats = 1, amount } = req.body;
-
-    if (!eventId || !amount || amount <= 0 || seats <= 0) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid event booking payload",
-      });
-    }
-
-    if (!razorpayInstance) {
-      return res.json({
-        success: true,
-        orderId: `order_mock_${Date.now()}`,
-        key: process.env.RAZORPAY_KEY_ID || null,
-        amount: Math.round(amount * 100),
-        currency: "INR",
-        _mock: true,
-      });
-    }
-
-    const order = await razorpayInstance.orders.create({
-      amount: Math.round(amount * 100),
-      currency: "INR",
-      receipt: `event_${eventId}_${Date.now()}`,
-      notes: {
-        eventId,
-        seats,
-        purpose: "event",
-      },
-      payment_capture: 1,
-    });
-
-    return res.json({
-      success: true,
-      orderId: order.id,
-      key: process.env.RAZORPAY_KEY_ID,
-      amount: order.amount,
-      currency: order.currency,
-    });
-  } catch (err) {
-    console.error("[EVENT CREATE ORDER ERROR]", err);
-    return res.status(500).json({
-      success: false,
-      message: "Event order creation failed",
-    });
-  }
+const razorpay = new Razorpay({
+  key_id: process.env.RAZORPAY_KEY_ID,
+  key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
 /* ======================================================
- * CREATE ORDER (ONLY REQUIRED PAYMENT ENDPOINT)
+ * HEALTH
  * ====================================================== */
+app.get("/", (_req, res) => res.send("GiveAura payment server running"));
+app.get("/health", (_req, res) => res.json({ ok: true }));
 
+/* ======================================================
+ * CREATE ORDER (DONATION + EVENT)
+ * ====================================================== */
 app.post("/api/payment/create-order", async (req, res) => {
   try {
-    console.log("🔥 CREATE-ORDER PAYLOAD:", req.body);
-    const { amount, campaignId = null, purpose = "donation", meta = {} } =
-      req.body;
+    console.log("🔥 CREATE ORDER:", req.body);
 
-    if (!amount || Number(amount) <= 0) {
+    const {
+      amount,
+      purpose = "donation",
+      campaignId = null,
+      meta = {},
+    } = req.body || {};
+
+    const numericAmount = Number(amount);
+
+    /* ---------- VALIDATION ---------- */
+    if (!numericAmount || numericAmount <= 0) {
       return res.status(400).json({
         success: false,
         message: "Invalid amount",
       });
     }
 
-    
-const ALLOWED_PURPOSES = ["donation", "event"];
-
-if (!ALLOWED_PURPOSES.includes(purpose)) {
-  return res.status(400).json({
-    success: false,
-    message: "Invalid payment purpose",
-  });
-}
-
-if (purpose === "donation" && !campaignId) {
-  return res.status(400).json({
-    success: false,
-    message: "campaignId is required for donations",
-  });
-}
-
-if (purpose === "event") {
-  // allowed
-}
-
-    app.post("/api/events/create-booking-order", async (req, res) => {
-  try {
-    const { amount, eventId, seats = 1 } = req.body;
-
-    if (!eventId || !amount || amount <= 0 || seats <= 0) {
+    if (purpose === "donation" && !campaignId) {
       return res.status(400).json({
         success: false,
-        message: "Invalid event booking payload",
+        message: "campaignId is required for donations",
       });
     }
 
-    if (!razorpayInstance) {
-      return res.json({
-        success: true,
-        orderId: `order_mock_${Date.now()}`,
-        key: process.env.RAZORPAY_KEY_ID || null,
-        amount: Math.round(Number(amount) * 100),
-        currency: "INR",
-        _mock: true,
+    if (!["donation", "event"].includes(purpose)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid payment purpose",
       });
     }
 
-    const order = await razorpayInstance.orders.create({
-      amount: Math.round(Number(amount) * 100),
+    /* ---------- CREATE RAZORPAY ORDER ---------- */
+    const order = await razorpay.orders.create({
+      amount: Math.round(numericAmount * 100), // paise
       currency: "INR",
-      receipt: `event_${eventId}_${Date.now()}`,
-      notes: {
-        eventId,
-        seats,
-        purpose: "event",
-      },
       payment_capture: 1,
-    });
-
-    return res.json({
-      success: true,
-      orderId: order.id,
-      key: process.env.RAZORPAY_KEY_ID,
-      amount: order.amount,
-      currency: order.currency,
-    });
-  } catch (err) {
-    console.error("[EVENT ORDER ERROR]", err);
-    return res.status(500).json({
-      success: false,
-      message: "Event order failed",
-    });
-  }
-});
-
-
-    // Mock mode (local / no Razorpay keys)
-    if (!razorpayInstance) {
-      return res.json({
-        success: true,
-        orderId: `order_mock_${Date.now()}`,
-        key: process.env.RAZORPAY_KEY_ID || null,
-        amount: Math.round(Number(amount) * 100),
-        currency: "INR",
-        _mock: true,
-      });
-    }
-
-    const order = await razorpayInstance.orders.create({
-      amount: Math.round(Number(amount) * 100), // paise
-      currency: "INR",
-      receipt: `rcpt_${Date.now()}`,
       notes: {
-        campaignId,
         purpose,
+        campaignId,
         ...meta,
       },
-      payment_capture: 1,
     });
 
     return res.json({
       success: true,
       orderId: order.id,
-      key: process.env.RAZORPAY_KEY_ID,
       amount: order.amount,
-      currency: order.currency,
+      currency: "INR",
+      key: process.env.RAZORPAY_KEY_ID,
     });
   } catch (err) {
-    console.error("[CREATE ORDER ERROR]", err);
+    console.error("❌ CREATE ORDER ERROR:", err);
     return res.status(500).json({
       success: false,
-      message: "Create order failed",
+      message: "Order creation failed",
     });
   }
 });
 
 /* ======================================================
- * CONFIRM PAYMENT — DISABLED (OLD FLOW)
+ * VERIFY SIGNATURE
  * ====================================================== */
-
-app.post("/api/payment/confirm", (_req, res) => {
-  return res.status(410).json({
-    success: false,
-    message:
-      "Payment confirmation is handled client-side via donateToCampaign().",
-  });
-});
-
-/* ======================================================
- * OPTIONAL: SIGNATURE VERIFICATION (SAFE, NO DB WRITE)
- * ====================================================== */
-
 app.post("/api/payment/verify-signature", (req, res) => {
   try {
-    const { paymentId, orderId, signature } = req.body;
+    const { paymentId, orderId, signature } = req.body || {};
 
     if (!paymentId || !orderId || !signature) {
-      return res.status(400).json({
-        valid: false,
-        message: "Missing fields",
-      });
+      return res.status(400).json({ valid: false });
     }
 
     const expected = crypto
@@ -301,7 +130,7 @@ app.post("/api/payment/verify-signature", (req, res) => {
 
     return res.json({ valid: expected === signature });
   } catch (err) {
-    console.error("[VERIFY SIGNATURE ERROR]", err);
+    console.error("VERIFY ERROR:", err);
     return res.status(500).json({ valid: false });
   }
 });
@@ -309,8 +138,7 @@ app.post("/api/payment/verify-signature", (req, res) => {
 /* ======================================================
  * START SERVER
  * ====================================================== */
-
-const PORT = Number(process.env.PORT) || 5000;
+const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
-  console.log(`🚀 Payment server listening on port ${PORT}`);
+  console.log(`🚀 Payment server running on ${PORT}`);
 });
