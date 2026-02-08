@@ -105,21 +105,19 @@ app.post("/api/payment/create-order", async (req, res) => {
     }
 
     
-if (purpose === "donation") {
-  if (!campaignId) {
-    return res.status(400).json({
-      success: false,
-      message: "campaignId is required for donations",
-    });
-  }
-}
-
-    const ALLOWED_PURPOSES = ["donation", "event"];
+const ALLOWED_PURPOSES = ["donation", "event"];
 
 if (!ALLOWED_PURPOSES.includes(purpose)) {
   return res.status(400).json({
     success: false,
     message: "Invalid payment purpose",
+  });
+}
+
+if (purpose === "donation" && !campaignId) {
+  return res.status(400).json({
+    success: false,
+    message: "campaignId is required for donations",
   });
 }
 
