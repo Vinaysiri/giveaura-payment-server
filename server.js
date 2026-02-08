@@ -126,6 +126,56 @@ if (purpose === "event") {
   // allowed
 }
 
+    app.post("/api/events/create-booking-order", async (req, res) => {
+  try {
+    const { amount, eventId, seats = 1 } = req.body;
+
+    if (!eventId || !amount || amount <= 0 || seats <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid event booking payload",
+      });
+    }
+
+    if (!razorpayInstance) {
+      return res.json({
+        success: true,
+        orderId: `order_mock_${Date.now()}`,
+        key: process.env.RAZORPAY_KEY_ID || null,
+        amount: Math.round(Number(amount) * 100),
+        currency: "INR",
+        _mock: true,
+      });
+    }
+
+    const order = await razorpayInstance.orders.create({
+      amount: Math.round(Number(amount) * 100),
+      currency: "INR",
+      receipt: `event_${eventId}_${Date.now()}`,
+      notes: {
+        eventId,
+        seats,
+        purpose: "event",
+      },
+      payment_capture: 1,
+    });
+
+    return res.json({
+      success: true,
+      orderId: order.id,
+      key: process.env.RAZORPAY_KEY_ID,
+      amount: order.amount,
+      currency: order.currency,
+    });
+  } catch (err) {
+    console.error("[EVENT ORDER ERROR]", err);
+    return res.status(500).json({
+      success: false,
+      message: "Event order failed",
+    });
+  }
+});
+
 
     // Mock mode (local / no Razorpay keys)
     if (!razorpayInstance) {
