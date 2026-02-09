@@ -2,8 +2,17 @@ require("dotenv").config();
 const express = require("express");
 const crypto = require("crypto");
 const Razorpay = require("razorpay");
-
+const admin = require("firebase-admin");
 const app = express();
+
+if (!admin.apps.length) {
+  admin.initializeApp({
+    credential: admin.credential.applicationDefault(),
+  });
+}
+
+const db = admin.firestore();
+
 
 /* ======================================================
  * BASIC MIDDLEWARE
@@ -149,6 +158,82 @@ app.post("/api/payment/verify-signature", (req, res) => {
  * START SERVER
  * ====================================================== */
 const PORT = process.env.PORT || 5000;
+
+app.post(
+  "/api/webhooks/razorpay",
+  express.raw({ type: "application/json" }),
+  async (req, res) => {
+    try {
+      const secret = process.env.RAZORPAY_WEBHOOK_SECRET;
+
+      const signature = req.headers["x-razorpay-signature"];
+      const body = req.body.toString(); // RAW body
+
+      const expectedSignature = crypto
+        .createHmac("sha256", secret)
+        .update(body)
+        .digest("hex");
+
+      if (expectedSignature !== signature) {
+        console.error("❌ Invalid Razorpay webhook signature");
+        return res.status(400).send("Invalid signature");
+      }
+
+      const payload = JSON.parse(body);
+
+      if (payload.event !== "payment.captured") {
+        return res.status(200).send("Ignored");
+      }
+
+      const payment = payload.payload.payment.entity;
+      const notes = payment.notes || {};
+
+      /* ===============================
+         EVENT BOOKING CONFIRMATION
+      =============================== */
+      if (notes.source === "event_booking" && notes.bookingId) {
+        const bookingRef = db
+          .collection("event_bookings")
+          .doc(notes.bookingId);
+
+        const bookingSnap = await bookingRef.get();
+
+        if (!bookingSnap.exists) {
+          console.warn("⚠️ Booking not found:", notes.bookingId);
+          return res.status(200).send("Booking not found");
+        }
+
+        const booking = bookingSnap.data();
+
+        // 🔁 Idempotency protection
+        if (booking.status === "confirmed") {
+          return res.status(200).send("Already confirmed");
+        }
+
+        await bookingRef.update({
+          status: "confirmed",
+          isPaid: true,
+          paymentId: payment.id,
+          confirmedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        if (booking.eventId && booking.seats) {
+          await db.collection("events").doc(booking.eventId).update({
+            seatsSold: admin.firestore.FieldValue.increment(booking.seats),
+          });
+        }
+
+        console.log("✅ Event booking confirmed:", notes.bookingId);
+      }
+
+      return res.status(200).send("OK");
+    } catch (err) {
+      console.error("❌ Razorpay webhook error:", err);
+      return res.status(500).send("Webhook failed");
+    }
+  }
+);
+
 app.listen(PORT, () => {
   console.log(`🚀 Payment server running on ${PORT}`);
 });
