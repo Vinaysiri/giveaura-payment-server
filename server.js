@@ -51,7 +51,7 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
  * ====================================================== */
 app.post("/api/payment/create-order", async (req, res) => {
   try {
-    console.log("🔥 CREATE ORDER PAYLOAD:", req.body);
+    console.log("CREATE ORDER PAYLOAD:", req.body);
 
     const {
       amount,
@@ -70,7 +70,7 @@ app.post("/api/payment/create-order", async (req, res) => {
       });
     }
 
-    if (!["donation", "event"].includes(purpose)) {
+    if (!["donation", "event", "giveaura-ad"].includes(purpose)) {
       return res.status(400).json({
         success: false,
         message: "Invalid payment purpose",
@@ -87,7 +87,7 @@ app.post("/api/payment/create-order", async (req, res) => {
 
     // Razorpay env check
     if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
-      console.error("❌ Razorpay keys missing in environment");
+      console.error("Razorpay keys missing in environment");
       return res.status(500).json({
         success: false,
         message: "Payment gateway not configured",
@@ -114,7 +114,7 @@ app.post("/api/payment/create-order", async (req, res) => {
       key: process.env.RAZORPAY_KEY_ID,
     });
   } catch (err) {
-    console.error("❌ CREATE ORDER ERROR:", err);
+    console.error("CREATE ORDER ERROR:", err);
     return res.status(500).json({
       success: false,
       message: "Order creation failed",
@@ -150,5 +150,5 @@ app.post("/api/payment/verify-signature", (req, res) => {
  * ====================================================== */
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
-  console.log(`🚀 Payment server running on ${PORT}`);
+  console.log(`Payment server running on ${PORT}`);
 });
