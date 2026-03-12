@@ -16,6 +16,8 @@ app.use(express.json({ limit: "1mb" }));
 const ALLOWED_ORIGINS = [
   "https://fundraiser-donations.web.app",
   "https://fundraiser-donations.firebaseapp.com",
+  "https://giveaura.life",
+  "https://www.giveaura.life",
   "http://localhost:5173",
   "http://localhost:3000",
 ];
