@@ -3,6 +3,7 @@ require("dotenv").config();
 const express = require("express");
 const crypto = require("crypto");
 const Razorpay = require("razorpay");
+const admin = require("firebase-admin");
 
 const app = express();
 
@@ -192,6 +193,34 @@ if (razorpayConfigured) {
       process.env
         .RAZORPAY_KEY_SECRET,
   });
+}
+
+
+/* ======================================================
+ * FIREBASE ADMIN
+ * ====================================================== */
+let firebaseAdminApp = null;
+let adminDb = null;
+
+try {
+  if (!admin.apps.length) {
+    if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+      admin.initializeApp({
+        credential: admin.credential.cert(
+          JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)
+        ),
+      });
+    } else {
+      admin.initializeApp({
+        credential: admin.credential.applicationDefault(),
+      });
+    }
+  }
+
+  firebaseAdminApp = admin.app();
+  adminDb = admin.firestore();
+} catch (err) {
+  console.error("[startup] Firebase Admin initialization failed:", err);
 }
 
 /* ======================================================
@@ -557,6 +586,52 @@ function calculateEventSplit({
   };
 }
 
+
+function getBearerToken(req) {
+  const value = String(req.headers.authorization || "").trim();
+  return value.toLowerCase().startsWith("bearer ")
+    ? value.slice(7).trim()
+    : null;
+}
+
+async function getOptionalAuthUser(req) {
+  const token = getBearerToken(req);
+  if (!token) return null;
+  if (!firebaseAdminApp) throw new Error("Firebase Admin is not configured");
+  return admin.auth().verifyIdToken(token);
+}
+
+function getEventBookedSeats(eventData = {}) {
+  for (const value of [
+    eventData.bookedSeats,
+    eventData.registeredCount,
+    eventData.seatsSold,
+    eventData.attendees,
+  ]) {
+    const n = Number(value);
+    if (Number.isFinite(n) && n >= 0) return Math.floor(n);
+  }
+  return 0;
+}
+
+function determineEventOwnerType(eventData = {}) {
+  for (const value of [
+    eventData.creatorType,
+    eventData.eventOwnerType,
+    eventData.ownerType,
+    eventData.organizerType,
+    eventData.createdByType,
+  ]) {
+    if (normalizeEventOwnerType(value) === "giveaura") return "giveaura";
+  }
+
+  return (
+    eventData.isGiveAuraEvent === true ||
+    eventData.createdByAdmin === true ||
+    eventData.platformOwned === true
+  ) ? "giveaura" : "external";
+}
+
 /* ======================================================
  * HEALTH
  * ====================================================== */
@@ -878,353 +953,137 @@ app.post(
 
 app.post(
   "/api/payment/create-event-order",
-
   async (req, res) => {
     try {
-      if (
-        !requireRazorpay(res)
-      ) {
-        return;
-      }
-
-      const {
-        eventId,
-
-        quantity = 1,
-
-        ticketPrice,
-
-        amount,
-
-        userId = null,
-
-        eventOwnerType =
-          "external",
-
-        organizerId =
-          null,
-
-        eventTitle =
-          null,
-
-        meta = {},
-      } =
-        req.body || {};
-
-      const normalizedEventId =
-        normalizeString(
-          eventId,
-          200
-        );
-
-      if (
-        !normalizedEventId
-      ) {
-        return res
-          .status(400)
-          .json({
-            success:
-              false,
-
-            message:
-              "eventId is required",
-          });
-      }
-
-      const normalizedQuantity =
-        normalizeQuantity(
-          quantity
-        );
-
-      if (
-        !normalizedQuantity
-      ) {
-        return res
-          .status(400)
-          .json({
-            success:
-              false,
-
-            message:
-              "Invalid ticket quantity",
-          });
-      }
-
-      /*
-       * Support either:
-       *
-       * ticketPrice = price of one ticket
-       *
-       * OR
-       *
-       * amount = total amount
-       *
-       * ticketPrice is preferred.
-       */
-
-      let normalizedTicketPrice =
-        normalizeAmount(
-          ticketPrice
-        );
-
-      let grossAmount = null;
-
-      if (
-        normalizedTicketPrice !==
-          null &&
-        normalizedTicketPrice >=
-          MIN_PAYMENT_AMOUNT_INR
-      ) {
-        grossAmount =
-          roundMoney(
-            normalizedTicketPrice *
-              normalizedQuantity
-          );
-      } else {
-        grossAmount =
-          normalizeAmount(
-            amount
-          );
-
-        if (
-          grossAmount !==
-            null &&
-          grossAmount > 0
-        ) {
-          normalizedTicketPrice =
-            roundMoney(
-              grossAmount /
-                normalizedQuantity
-            );
-        }
-      }
-
-      if (
-        grossAmount ===
-          null ||
-        grossAmount <
-          MIN_PAYMENT_AMOUNT_INR ||
-        grossAmount >
-          MAX_PAYMENT_AMOUNT_INR
-      ) {
-        return res
-          .status(400)
-          .json({
-            success:
-              false,
-
-            message:
-              "Event payment amount must be greater than zero",
-          });
-      }
-
-      const normalizedOwnerType =
-        normalizeEventOwnerType(
-          eventOwnerType
-        );
-
-      const normalizedUserId =
-        normalizeString(
-          userId,
-          200
-        );
-
-      const normalizedOrganizerId =
-        normalizeString(
-          organizerId,
-          200
-        );
-
-      const normalizedEventTitle =
-        normalizeString(
-          eventTitle,
-          200
-        );
-
-      const split =
-        calculateEventSplit({
-          grossAmount,
-
-          eventOwnerType:
-            normalizedOwnerType,
-        });
-
-      const amountPaise =
-        toPaise(
-          grossAmount
-        );
-
-      const receipt =
-        createReceipt("gae");
-
-      const cleanMeta =
-        sanitizeNotes(meta);
-
-      console.info(
-        "[payment/create-event-order]",
-        {
-          eventId:
-            normalizedEventId,
-
-          quantity:
-            normalizedQuantity,
-
-          ticketPrice:
-            normalizedTicketPrice,
-
-          grossAmount,
-
-          amountPaise,
-
-          eventOwnerType:
-            normalizedOwnerType,
-
-          platformFeePercent:
-            split.platformFeePercent,
-
-          receipt,
-        }
-      );
-
-      const order =
-        await razorpay.orders.create(
-          {
-            amount:
-              amountPaise,
-
-            currency:
-              "INR",
-
-            receipt,
-
-            notes: {
-              purpose:
-                "event-booking",
-
-              eventId:
-                normalizedEventId,
-
-              quantity:
-                String(
-                  normalizedQuantity
-                ),
-
-              ticketPrice:
-                String(
-                  normalizedTicketPrice
-                ),
-
-              eventOwnerType:
-                normalizedOwnerType,
-
-              platformFeePercent:
-                String(
-                  split.platformFeePercent
-                ),
-
-              ...(normalizedUserId
-                ? {
-                    userId:
-                      normalizedUserId,
-                  }
-                : {}),
-
-              ...(normalizedOrganizerId
-                ? {
-                    organizerId:
-                      normalizedOrganizerId,
-                  }
-                : {}),
-
-              ...(normalizedEventTitle
-                ? {
-                    eventTitle:
-                      normalizedEventTitle,
-                  }
-                : {}),
-
-              ...cleanMeta,
-            },
-          }
-        );
-
-      return res
-        .status(200)
-        .json({
-          success: true,
-
-          key:
-            process.env
-              .RAZORPAY_KEY_ID,
-
-          orderId:
-            order.id,
-
-          amount:
-            order.amount,
-
-          currency:
-            order.currency ||
-            "INR",
-
-          receipt:
-            order.receipt ||
-            receipt,
-
-          purpose:
-            "event-booking",
-
-          event: {
-            eventId:
-              normalizedEventId,
-
-            title:
-              normalizedEventTitle,
-
-            quantity:
-              normalizedQuantity,
-
-            ticketPrice:
-              normalizedTicketPrice,
-
-            ownerType:
-              normalizedOwnerType,
-          },
-
-          breakdown: {
-            ticketPrice:
-              normalizedTicketPrice,
-
-            quantity:
-              normalizedQuantity,
-
-            grossAmount:
-              split.grossAmount,
-
-            platformFeePercent:
-              split.platformFeePercent,
-
-            platformAmount:
-              split.platformAmount,
-
-            organizerAmount:
-              split.organizerAmount,
-          },
-        });
-    } catch (err) {
-      console.error(
-        "[payment/create-event-order] error:",
-        err
-      );
-
-      return res
-        .status(500)
-        .json({
+      if (!requireRazorpay(res)) return;
+      if (!adminDb) {
+        return res.status(503).json({
           success: false,
-
-          message:
-            "Event order creation failed",
+          message: "Firebase Admin is not configured on the payment server",
         });
+      }
+
+      const { eventId, quantity = 1, userId = null } = req.body || {};
+      const normalizedEventId = normalizeString(eventId, 200);
+      const normalizedQuantity = normalizeQuantity(quantity);
+
+      if (!normalizedEventId) {
+        return res.status(400).json({ success: false, message: "eventId is required" });
+      }
+
+      if (!normalizedQuantity || normalizedQuantity > 10) {
+        return res.status(400).json({
+          success: false,
+          message: "Ticket quantity must be between 1 and 10",
+        });
+      }
+
+      const authUser = await getOptionalAuthUser(req);
+      const eventRef = adminDb.collection("events").doc(normalizedEventId);
+      const eventSnap = await eventRef.get();
+
+      if (!eventSnap.exists) {
+        return res.status(404).json({ success: false, message: "Event not found" });
+      }
+
+      const eventData = eventSnap.data() || {};
+
+      if (
+        eventData.bookingEnabled !== true ||
+        String(eventData.ticketType || "").trim().toLowerCase() !== "paid"
+      ) {
+        return res.status(409).json({
+          success: false,
+          message: "Paid booking is not enabled for this event",
+        });
+      }
+
+      const ticketPrice = normalizeAmount(eventData.ticketPrice);
+      if (ticketPrice === null || ticketPrice < MIN_PAYMENT_AMOUNT_INR) {
+        return res.status(409).json({
+          success: false,
+          message: "Event has an invalid ticket price",
+        });
+      }
+
+      const totalSeats = Number(eventData.totalSeats || 0);
+      const bookedSeats = getEventBookedSeats(eventData);
+
+      if (
+        Number.isFinite(totalSeats) &&
+        totalSeats > 0 &&
+        bookedSeats + normalizedQuantity > totalSeats
+      ) {
+        return res.status(409).json({
+          success: false,
+          message: "Not enough seats are available",
+          availableSeats: Math.max(totalSeats - bookedSeats, 0),
+        });
+      }
+
+      const grossAmount = roundMoney(ticketPrice * normalizedQuantity);
+      const eventOwnerType = determineEventOwnerType(eventData);
+      const split = calculateEventSplit({ grossAmount, eventOwnerType });
+
+      const organizerId = normalizeString(
+        eventData.organizerId ||
+        eventData.creatorId ||
+        eventData.createdByUid ||
+        null,
+        200
+      );
+
+      const effectiveUserId =
+        authUser?.uid || normalizeString(userId, 200);
+
+      const receipt = createReceipt("gae");
+      const order = await razorpay.orders.create({
+        amount: toPaise(grossAmount),
+        currency: "INR",
+        receipt,
+        notes: {
+          purpose: "event-booking",
+          eventId: normalizedEventId,
+          quantity: String(normalizedQuantity),
+          ticketPrice: String(ticketPrice),
+          eventOwnerType,
+          platformFeePercent: String(split.platformFeePercent),
+          ...(effectiveUserId ? { userId: effectiveUserId } : {}),
+          ...(organizerId ? { organizerId } : {}),
+          eventTitle: String(eventData.title || "GiveAura Event").slice(0, 200),
+        },
+      });
+
+      return res.status(200).json({
+        success: true,
+        key: process.env.RAZORPAY_KEY_ID,
+        orderId: order.id,
+        amount: order.amount,
+        currency: order.currency || "INR",
+        receipt: order.receipt || receipt,
+        purpose: "event-booking",
+        event: {
+          eventId: normalizedEventId,
+          title: eventData.title || null,
+          quantity: normalizedQuantity,
+          ticketPrice,
+          ownerType: eventOwnerType,
+        },
+        breakdown: {
+          ticketPrice,
+          quantity: normalizedQuantity,
+          grossAmount: split.grossAmount,
+          platformFeePercent: split.platformFeePercent,
+          platformAmount: split.platformAmount,
+          organizerAmount: split.organizerAmount,
+        },
+      });
+    } catch (err) {
+      console.error("[payment/create-event-order] error:", err);
+      return res.status(500).json({
+        success: false,
+        message: err?.message || "Event order creation failed",
+      });
     }
   }
 );
@@ -1263,483 +1122,271 @@ app.post(
 
 app.post(
   "/api/payment/confirm-event-booking",
-
   async (req, res) => {
     try {
-      if (
-        !requireRazorpay(res)
-      ) {
-        return;
+      if (!requireRazorpay(res)) return;
+      if (!adminDb) {
+        return res.status(503).json({
+          success: false,
+          message: "Firebase Admin is not configured on the payment server",
+        });
       }
 
       const {
-        eventId,
+        eventId, paymentId, orderId, signature,
+        attendee = {}, quantity: requestedQuantity = 1,
+        userId = null, notes: attendeeNotes = "",
+      } = req.body || {};
 
-        paymentId,
+      const eid = normalizeString(eventId, 200);
+      const pid = normalizeString(paymentId, 200);
+      const oid = normalizeString(orderId, 200);
+      const sig = normalizeString(signature, 500);
 
-        orderId,
-
-        signature,
-
-        attendee = null,
-
-        userId = null,
-      } =
-        req.body || {};
-
-      const normalizedEventId =
-        normalizeString(
-          eventId,
-          200
-        );
-
-      const normalizedPaymentId =
-        normalizeString(
-          paymentId,
-          200
-        );
-
-      const normalizedOrderId =
-        normalizeString(
-          orderId,
-          200
-        );
-
-      const normalizedSignature =
-        normalizeString(
-          signature,
-          500
-        );
-
-      if (
-        !normalizedEventId ||
-        !normalizedPaymentId ||
-        !normalizedOrderId ||
-        !normalizedSignature
-      ) {
-        return res
-          .status(400)
-          .json({
-            success:
-              false,
-
-            message:
-              "eventId, paymentId, orderId and signature are required",
-          });
-      }
-
-      /* ------------------------------------------
-       * Verify signature
-       * ------------------------------------------ */
-
-      const signatureValid =
-        verifyRazorpaySignature({
-          orderId:
-            normalizedOrderId,
-
-          paymentId:
-            normalizedPaymentId,
-
-          signature:
-            normalizedSignature,
+      if (!eid || !pid || !oid || !sig) {
+        return res.status(400).json({
+          success: false,
+          message: "eventId, paymentId, orderId and signature are required",
         });
-
-      if (
-        !signatureValid
-      ) {
-        return res
-          .status(401)
-          .json({
-            success:
-              false,
-
-            valid:
-              false,
-
-            message:
-              "Invalid payment signature",
-          });
       }
 
-      /* ------------------------------------------
-       * Fetch trusted Razorpay records
-       * ------------------------------------------ */
-
-      const [
-        payment,
-        order,
-      ] =
-        await Promise.all([
-          razorpay.payments.fetch(
-            normalizedPaymentId
-          ),
-
-          razorpay.orders.fetch(
-            normalizedOrderId
-          ),
-        ]);
-
-      if (!payment) {
-        return res
-          .status(404)
-          .json({
-            success:
-              false,
-
-            message:
-              "Payment not found",
-          });
+      if (!verifyRazorpaySignature({ orderId: oid, paymentId: pid, signature: sig })) {
+        return res.status(401).json({
+          success: false, valid: false, message: "Invalid payment signature",
+        });
       }
 
-      if (!order) {
-        return res
-          .status(404)
-          .json({
-            success:
-              false,
+      const authUser = await getOptionalAuthUser(req);
+      const [payment, order] = await Promise.all([
+        razorpay.payments.fetch(pid),
+        razorpay.orders.fetch(oid),
+      ]);
 
-            message:
-              "Order not found",
-          });
+      if (!payment || !order || String(payment.order_id || "") !== oid) {
+        return res.status(409).json({
+          success: false, message: "Payment/order verification failed",
+        });
       }
 
-      /* ------------------------------------------
-       * Payment must belong to order
-       * ------------------------------------------ */
-
-      if (
-        String(
-          payment.order_id ||
-            ""
-        ) !==
-        normalizedOrderId
-      ) {
-        return res
-          .status(409)
-          .json({
-            success:
-              false,
-
-            message:
-              "Payment does not belong to this order",
-          });
-      }
-
-      /* ------------------------------------------
-       * Amount verification
-       * ------------------------------------------ */
-
-      const paymentAmount =
-        Number(
-          payment.amount ||
-            0
-        );
-
-      const orderAmount =
-        Number(
-          order.amount ||
-            0
-        );
-
+      const paymentAmount = Number(payment.amount || 0);
       if (
         !paymentAmount ||
-        !orderAmount ||
-        paymentAmount !==
-          orderAmount
+        paymentAmount !== Number(order.amount || 0) ||
+        String(payment.currency || "").toUpperCase() !== "INR" ||
+        String(order.currency || "").toUpperCase() !== "INR" ||
+        payment.status !== "captured"
       ) {
-        return res
-          .status(409)
-          .json({
-            success:
-              false,
-
-            message:
-              "Payment amount mismatch",
-          });
-      }
-
-      /* ------------------------------------------
-       * Currency verification
-       * ------------------------------------------ */
-
-      const paymentCurrency =
-        String(
-          payment.currency ||
-            ""
-        ).toUpperCase();
-
-      const orderCurrency =
-        String(
-          order.currency ||
-            ""
-        ).toUpperCase();
-
-      if (
-        paymentCurrency !==
-          "INR" ||
-        orderCurrency !==
-          "INR"
-      ) {
-        return res
-          .status(409)
-          .json({
-            success:
-              false,
-
-            message:
-              "Unexpected payment currency",
-          });
-      }
-
-      /* ------------------------------------------
-       * Captured payment required
-       * ------------------------------------------ */
-
-      if (
-        payment.status !==
-          "captured"
-      ) {
-        return res
-          .status(409)
-          .json({
-            success:
-              false,
-
-            message:
-              "Payment has not been captured",
-
-            paymentStatus:
-              payment.status ||
-              null,
-          });
-      }
-
-      const notes =
-        order.notes &&
-        typeof order.notes ===
-          "object"
-          ? order.notes
-          : {};
-
-      /* ------------------------------------------
-       * Verify event booking purpose
-       * ------------------------------------------ */
-
-      if (
-        String(
-          notes.purpose ||
-            ""
-        ) !==
-        "event-booking"
-      ) {
-        return res
-          .status(409)
-          .json({
-            success:
-              false,
-
-            message:
-              "Order is not an event booking order",
-          });
-      }
-
-      /* ------------------------------------------
-       * Verify eventId against Razorpay order
-       * ------------------------------------------ */
-
-      if (
-        String(
-          notes.eventId ||
-            ""
-        ) !==
-        normalizedEventId
-      ) {
-        return res
-          .status(409)
-          .json({
-            success:
-              false,
-
-            message:
-              "Event ID does not match payment order",
-          });
-      }
-
-      /* ------------------------------------------
-       * Read order metadata
-       * ------------------------------------------ */
-
-      const quantity =
-        normalizeQuantity(
-          notes.quantity ||
-            1
-        ) || 1;
-
-      const eventOwnerType =
-        normalizeEventOwnerType(
-          notes.eventOwnerType
-        );
-
-      /*
-       * Gross is derived from actual captured
-       * Razorpay amount, not from frontend.
-       */
-
-      const grossAmount =
-        fromPaise(
-          paymentAmount
-        );
-
-      const split =
-        calculateEventSplit({
-          grossAmount,
-
-          eventOwnerType,
-        });
-
-      const ticketPrice =
-        roundMoney(
-          grossAmount /
-            quantity
-        );
-
-      const bookingReference =
-        `GAB-${Date.now()
-          .toString(36)
-          .toUpperCase()}-${crypto
-          .randomBytes(3)
-          .toString("hex")
-          .toUpperCase()}`;
-
-      console.info(
-        "[payment/confirm-event-booking]",
-        {
-          eventId:
-            normalizedEventId,
-
-          paymentId:
-            normalizedPaymentId,
-
-          orderId:
-            normalizedOrderId,
-
-          quantity,
-
-          grossAmount,
-
-          eventOwnerType,
-
-          platformAmount:
-            split.platformAmount,
-
-          organizerAmount:
-            split.organizerAmount,
-
-          bookingReference,
-        }
-      );
-
-      return res
-        .status(200)
-        .json({
-          success: true,
-
-          valid: true,
-
-          bookingId:
-            bookingReference,
-
-          booking: {
-            bookingId:
-              bookingReference,
-
-            eventId:
-              normalizedEventId,
-
-            eventTitle:
-              notes.eventTitle ||
-              null,
-
-            quantity,
-
-            ticketPrice,
-
-            grossAmount,
-
-            currency:
-              "INR",
-
-            attendee:
-              attendee &&
-              typeof attendee ===
-                "object"
-                ? attendee
-                : null,
-
-            userId:
-              normalizeString(
-                userId,
-                200
-              ) ||
-              notes.userId ||
-              null,
-
-            organizerId:
-              notes.organizerId ||
-              null,
-
-            eventOwnerType,
-
-            paymentId:
-              normalizedPaymentId,
-
-            orderId:
-              normalizedOrderId,
-
-            paymentStatus:
-              payment.status,
-
-            bookingStatus:
-              "confirmed",
-
-            createdAt:
-              new Date().toISOString(),
-          },
-
-          split: {
-            grossAmount:
-              split.grossAmount,
-
-            platformFeePercent:
-              split.platformFeePercent,
-
-            giveAuraAmount:
-              split.platformAmount,
-
-            organizerAmount:
-              split.organizerAmount,
-          },
-
-          message:
-            "Event payment verified successfully",
-        });
-    } catch (err) {
-      console.error(
-        "[payment/confirm-event-booking] error:",
-        err
-      );
-
-      return res
-        .status(500)
-        .json({
+        return res.status(409).json({
           success: false,
-
-          valid:
-            false,
-
-          message:
-            "Event booking confirmation failed",
+          message: "Payment is not a valid captured INR payment for this order",
         });
+      }
+
+      const orderNotes =
+        order.notes && typeof order.notes === "object" ? order.notes : {};
+
+      if (
+        String(orderNotes.purpose || "") !== "event-booking" ||
+        String(orderNotes.eventId || "") !== eid
+      ) {
+        return res.status(409).json({
+          success: false, message: "Order does not match this event booking",
+        });
+      }
+
+      const quantity = normalizeQuantity(orderNotes.quantity);
+      if (
+        !quantity ||
+        quantity > 10 ||
+        quantity !== normalizeQuantity(requestedQuantity)
+      ) {
+        return res.status(409).json({
+          success: false, message: "Ticket quantity mismatch",
+        });
+      }
+
+      const normalizedAttendee = {
+        fullName: normalizeString(attendee?.fullName, 150) || "",
+        email: String(normalizeString(attendee?.email, 200) || "").toLowerCase(),
+        phone: normalizeString(attendee?.phone, 50) || "",
+      };
+
+      if (
+        !normalizedAttendee.fullName ||
+        !normalizedAttendee.email ||
+        !normalizedAttendee.phone
+      ) {
+        return res.status(400).json({
+          success: false, message: "Complete attendee details are required",
+        });
+      }
+
+      const eventRef = adminDb.collection("events").doc(eid);
+      const ledgerRef = adminDb.collection("paymentLedger").doc(pid);
+      const bookingRef = adminDb.collection("eventBookings").doc();
+      const revenueRef = adminDb.collection("eventRevenue").doc(eid);
+      const effectiveUserId =
+        authUser?.uid ||
+        normalizeString(userId, 200) ||
+        normalizeString(orderNotes.userId, 200);
+
+      let result = null;
+
+      await adminDb.runTransaction(async (tx) => {
+        const eventSnap = await tx.get(eventRef);
+        const ledgerSnap = await tx.get(ledgerRef);
+        const revenueSnap = await tx.get(revenueRef);
+
+        if (ledgerSnap.exists) {
+          const existing = ledgerSnap.data() || {};
+          result = {
+            alreadyProcessed: true,
+            bookingId: existing.bookingId || null,
+            breakdown: existing.breakdown || null,
+          };
+          return;
+        }
+
+        if (!eventSnap.exists) throw new Error("Event no longer exists");
+        const eventData = eventSnap.data() || {};
+
+        if (
+          eventData.bookingEnabled !== true ||
+          String(eventData.ticketType || "").trim().toLowerCase() !== "paid"
+        ) {
+          throw new Error("Event booking is no longer available");
+        }
+
+        const ticketPrice = normalizeAmount(eventData.ticketPrice);
+        if (ticketPrice === null || ticketPrice <= 0) {
+          throw new Error("Event ticket price is invalid");
+        }
+
+        const expectedGross = roundMoney(ticketPrice * quantity);
+        if (toPaise(expectedGross) !== paymentAmount) {
+          throw new Error("Paid amount does not match current event ticket price");
+        }
+
+        const totalSeats = Number(eventData.totalSeats || 0);
+        const currentBooked = getEventBookedSeats(eventData);
+
+        if (
+          Number.isFinite(totalSeats) &&
+          totalSeats > 0 &&
+          currentBooked + quantity > totalSeats
+        ) {
+          throw new Error("Not enough seats remain to confirm this booking");
+        }
+
+        const eventOwnerType = determineEventOwnerType(eventData);
+        const split = calculateEventSplit({
+          grossAmount: fromPaise(paymentAmount),
+          eventOwnerType,
+        });
+
+        const organizerId = normalizeString(
+          eventData.organizerId ||
+          eventData.creatorId ||
+          eventData.createdByUid ||
+          orderNotes.organizerId ||
+          null,
+          200
+        );
+
+        const breakdown = {
+          ticketPrice,
+          quantity,
+          grossAmount: split.grossAmount,
+          eventOwnerType,
+          platformCommissionPercent: split.platformFeePercent,
+          platformCommissionAmount: split.platformAmount,
+          organizerNetAmount: split.organizerAmount,
+        };
+
+        tx.set(bookingRef, {
+          bookingId: bookingRef.id,
+          eventId: eid,
+          eventTitle: eventData.title || orderNotes.eventTitle || null,
+          attendee: normalizedAttendee,
+          quantity,
+          ticketPrice,
+          grossAmount: split.grossAmount,
+          currency: "INR",
+          userId: effectiveUserId || null,
+          organizerId: organizerId || null,
+          eventOwnerType,
+          paymentId: pid,
+          orderId: oid,
+          paymentStatus: payment.status,
+          bookingStatus: "confirmed",
+          notes: normalizeString(attendeeNotes, 500) || "",
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        tx.set(ledgerRef, {
+          paymentId: pid,
+          orderId: oid,
+          purpose: "event-booking",
+          eventId: eid,
+          bookingId: bookingRef.id,
+          userId: effectiveUserId || null,
+          organizerId: organizerId || null,
+          amountPaise: paymentAmount,
+          currency: "INR",
+          status: "captured",
+          breakdown,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        const oldRevenue = revenueSnap.exists ? revenueSnap.data() || {} : {};
+        tx.set(revenueRef, {
+          eventId: eid,
+          eventTitle: eventData.title || null,
+          eventOwnerType,
+          organizerId: organizerId || null,
+          grossRevenue: roundMoney(Number(oldRevenue.grossRevenue || 0) + split.grossAmount),
+          platformRevenue: roundMoney(Number(oldRevenue.platformRevenue || 0) + split.platformAmount),
+          organizerPayable: roundMoney(Number(oldRevenue.organizerPayable || 0) + split.organizerAmount),
+          ticketsSold: Number(oldRevenue.ticketsSold || 0) + quantity,
+          bookingCount: Number(oldRevenue.bookingCount || 0) + 1,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          ...(!revenueSnap.exists
+            ? { createdAt: admin.firestore.FieldValue.serverTimestamp() }
+            : {}),
+        }, { merge: true });
+
+        const newBooked = currentBooked + quantity;
+        tx.update(eventRef, {
+          bookedSeats: newBooked,
+          registeredCount: newBooked,
+          attendees: newBooked,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        result = {
+          alreadyProcessed: false,
+          bookingId: bookingRef.id,
+          breakdown,
+        };
+      });
+
+      return res.status(200).json({
+        success: true,
+        valid: true,
+        alreadyProcessed: Boolean(result?.alreadyProcessed),
+        bookingId: result?.bookingId || null,
+        breakdown: result?.breakdown || null,
+        message: result?.alreadyProcessed
+          ? "Booking was already confirmed"
+          : "Event booking confirmed successfully",
+      });
+    } catch (err) {
+      console.error("[payment/confirm-event-booking] error:", err);
+      return res.status(500).json({
+        success: false,
+        valid: false,
+        message: err?.message || "Event booking confirmation failed",
+      });
     }
   }
 );
