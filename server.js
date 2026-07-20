@@ -10,7 +10,9 @@ const app = express();
  * CONFIG
  * ====================================================== */
 
-const PORT = Number(process.env.PORT || 5000);
+const PORT = Number(
+  process.env.PORT || 5000
+);
 
 const ALLOWED_ORIGINS = [
   "https://fundraiser-donations.web.app",
@@ -18,21 +20,10 @@ const ALLOWED_ORIGINS = [
   "https://giveaura.life",
   "https://www.giveaura.life",
 
-  // Local development
   "http://localhost:5173",
   "http://localhost:3000",
 ];
 
-/*
- * Supported payment purposes.
- *
- * donation      -> monetary fundraiser donation
- * event         -> generic event payment
- * event-booking -> paid event ticket booking
- * boost         -> campaign boost purchase
- * subscription  -> future subscription plans
- * giveaura-ad   -> GiveAura advertisement purchase
- */
 const ALLOWED_PURPOSES = new Set([
   "donation",
   "event",
@@ -42,17 +33,23 @@ const ALLOWED_PURPOSES = new Set([
   "giveaura-ad",
 ]);
 
-/*
- * Safety limits.
- *
- * These are NOT business-policy limits.
- * They only protect the payment endpoint from absurd values.
- *
- * Change MAX_PAYMENT_AMOUNT_INR later if your platform
- * legitimately needs larger transactions.
- */
 const MIN_PAYMENT_AMOUNT_INR = 1;
-const MAX_PAYMENT_AMOUNT_INR = 10000000; // ₹1 crore
+
+const MAX_PAYMENT_AMOUNT_INR =
+  10000000;
+
+/*
+ * External/public/youth-created event:
+ *
+ * GiveAura = 12%
+ * Organizer = 88%
+ *
+ * GiveAura-owned event:
+ *
+ * GiveAura = 100%
+ */
+const EXTERNAL_EVENT_PLATFORM_FEE_PERCENT =
+  12;
 
 /* ======================================================
  * BASIC MIDDLEWARE
@@ -71,17 +68,23 @@ app.use(
  * ====================================================== */
 
 app.use((req, res, next) => {
-  const origin = req.headers.origin;
+  const origin =
+    req.headers.origin;
 
-  /*
-   * Requests without Origin are allowed because they may
-   * come from server-to-server calls, health checks, etc.
-   */
-  if (origin && ALLOWED_ORIGINS.includes(origin)) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
+  if (
+    origin &&
+    ALLOWED_ORIGINS.includes(origin)
+  ) {
+    res.setHeader(
+      "Access-Control-Allow-Origin",
+      origin
+    );
   }
 
-  res.setHeader("Vary", "Origin");
+  res.setHeader(
+    "Vary",
+    "Origin"
+  );
 
   res.setHeader(
     "Access-Control-Allow-Headers",
@@ -98,13 +101,14 @@ app.use((req, res, next) => {
     "true"
   );
 
-  if (req.method === "OPTIONS") {
-    /*
-     * Reject browser preflight from unknown origins.
-     */
+  if (
+    req.method === "OPTIONS"
+  ) {
     if (
       origin &&
-      !ALLOWED_ORIGINS.includes(origin)
+      !ALLOWED_ORIGINS.includes(
+        origin
+      )
     ) {
       return res.sendStatus(403);
     }
@@ -112,17 +116,19 @@ app.use((req, res, next) => {
     return res.sendStatus(204);
   }
 
-  /*
-   * Reject browser requests from unknown origins.
-   */
   if (
     origin &&
-    !ALLOWED_ORIGINS.includes(origin)
+    !ALLOWED_ORIGINS.includes(
+      origin
+    )
   ) {
-    return res.status(403).json({
-      success: false,
-      message: "Origin not allowed",
-    });
+    return res
+      .status(403)
+      .json({
+        success: false,
+        message:
+          "Origin not allowed",
+      });
   }
 
   next();
@@ -135,15 +141,26 @@ app.use((req, res, next) => {
 function validateEnvironment() {
   const missing = [];
 
-  if (!process.env.RAZORPAY_KEY_ID) {
-    missing.push("RAZORPAY_KEY_ID");
+  if (
+    !process.env.RAZORPAY_KEY_ID
+  ) {
+    missing.push(
+      "RAZORPAY_KEY_ID"
+    );
   }
 
-  if (!process.env.RAZORPAY_KEY_SECRET) {
-    missing.push("RAZORPAY_KEY_SECRET");
+  if (
+    !process.env
+      .RAZORPAY_KEY_SECRET
+  ) {
+    missing.push(
+      "RAZORPAY_KEY_SECRET"
+    );
   }
 
-  if (missing.length > 0) {
+  if (
+    missing.length > 0
+  ) {
     console.error(
       `[startup] Missing required environment variables: ${missing.join(
         ", "
@@ -156,7 +173,8 @@ function validateEnvironment() {
   return true;
 }
 
-const razorpayConfigured = validateEnvironment();
+const razorpayConfigured =
+  validateEnvironment();
 
 /* ======================================================
  * RAZORPAY INIT
@@ -166,8 +184,13 @@ let razorpay = null;
 
 if (razorpayConfigured) {
   razorpay = new Razorpay({
-    key_id: process.env.RAZORPAY_KEY_ID,
-    key_secret: process.env.RAZORPAY_KEY_SECRET,
+    key_id:
+      process.env
+        .RAZORPAY_KEY_ID,
+
+    key_secret:
+      process.env
+        .RAZORPAY_KEY_SECRET,
   });
 }
 
@@ -175,7 +198,10 @@ if (razorpayConfigured) {
  * HELPERS
  * ====================================================== */
 
-function normalizeString(value, maxLength = 255) {
+function normalizeString(
+  value,
+  maxLength = 255
+) {
   if (
     value === null ||
     value === undefined
@@ -183,48 +209,110 @@ function normalizeString(value, maxLength = 255) {
     return null;
   }
 
-  const normalized = String(value)
-    .trim()
-    .slice(0, maxLength);
+  const normalized =
+    String(value)
+      .trim()
+      .slice(
+        0,
+        maxLength
+      );
 
   return normalized || null;
 }
 
-function normalizePurpose(value) {
-  return String(value || "donation")
+function normalizePurpose(
+  value
+) {
+  return String(
+    value || "donation"
+  )
     .trim()
     .toLowerCase();
 }
 
-function normalizeAmount(value) {
-  const numeric = Number(value);
+function normalizeAmount(
+  value
+) {
+  const numeric =
+    Number(value);
 
-  if (!Number.isFinite(numeric)) {
+  if (
+    !Number.isFinite(numeric)
+  ) {
     return null;
   }
 
-  /*
-   * Payment calculations should be restricted to
-   * two decimal places.
-   */
-  return Math.round(numeric * 100) / 100;
-}
-
-function toPaise(amountInRupees) {
-  return Math.round(
-    Number(amountInRupees) * 100
+  return (
+    Math.round(
+      numeric * 100
+    ) / 100
   );
 }
 
-function sanitizeNotes(meta = {}) {
-  /*
-   * Razorpay notes should contain small scalar values.
-   *
-   * Never blindly copy arbitrary nested client objects.
-   */
+function normalizeQuantity(
+  value
+) {
+  const numeric =
+    Number(value);
+
+  if (
+    !Number.isFinite(numeric)
+  ) {
+    return null;
+  }
+
+  const quantity =
+    Math.floor(numeric);
+
+  if (
+    quantity < 1 ||
+    quantity > 100
+  ) {
+    return null;
+  }
+
+  return quantity;
+}
+
+function toPaise(
+  amountInRupees
+) {
+  return Math.round(
+    Number(
+      amountInRupees
+    ) * 100
+  );
+}
+
+function fromPaise(
+  amountInPaise
+) {
+  return (
+    Math.round(
+      Number(
+        amountInPaise
+      )
+    ) / 100
+  );
+}
+
+function roundMoney(
+  value
+) {
+  return (
+    Math.round(
+      Number(value) * 100
+    ) / 100
+  );
+}
+
+function sanitizeNotes(
+  meta = {}
+) {
   if (
     !meta ||
-    typeof meta !== "object" ||
+    typeof meta !==
+      "object" ||
     Array.isArray(meta)
   ) {
     return {};
@@ -239,22 +327,30 @@ function sanitizeNotes(meta = {}) {
     "boostPlan",
     "eventId",
     "seats",
+    "quantity",
     "source",
     "campaignTitle",
     "referenceId",
+    "eventTitle",
+    "eventOwnerType",
+    "organizerId",
   ];
 
-  for (const key of allowedKeys) {
+  for (
+    const key of allowedKeys
+  ) {
     if (
-      !Object.prototype.hasOwnProperty.call(
-        meta,
-        key
-      )
+      !Object.prototype
+        .hasOwnProperty.call(
+          meta,
+          key
+        )
     ) {
       continue;
     }
 
-    const value = meta[key];
+    const value =
+      meta[key];
 
     if (
       value === null ||
@@ -264,36 +360,46 @@ function sanitizeNotes(meta = {}) {
     }
 
     if (
-      typeof value === "string" ||
-      typeof value === "number" ||
-      typeof value === "boolean"
+      typeof value ===
+        "string" ||
+      typeof value ===
+        "number" ||
+      typeof value ===
+        "boolean"
     ) {
-      clean[key] = String(value).slice(
-        0,
-        250
-      );
+      clean[key] =
+        String(value).slice(
+          0,
+          250
+        );
     }
   }
 
   return clean;
 }
 
-function safeCompareHex(a, b) {
+function safeCompareHex(
+  a,
+  b
+) {
   try {
-    const aBuffer = Buffer.from(
-      String(a || ""),
-      "hex"
-    );
+    const aBuffer =
+      Buffer.from(
+        String(a || ""),
+        "hex"
+      );
 
-    const bBuffer = Buffer.from(
-      String(b || ""),
-      "hex"
-    );
+    const bBuffer =
+      Buffer.from(
+        String(b || ""),
+        "hex"
+      );
 
     if (
       aBuffer.length === 0 ||
       bBuffer.length === 0 ||
-      aBuffer.length !== bBuffer.length
+      aBuffer.length !==
+        bBuffer.length
     ) {
       return false;
     }
@@ -316,20 +422,23 @@ function verifyRazorpaySignature({
     !orderId ||
     !paymentId ||
     !signature ||
-    !process.env.RAZORPAY_KEY_SECRET
+    !process.env
+      .RAZORPAY_KEY_SECRET
   ) {
     return false;
   }
 
-  const expectedSignature = crypto
-    .createHmac(
-      "sha256",
-      process.env.RAZORPAY_KEY_SECRET
-    )
-    .update(
-      `${orderId}|${paymentId}`
-    )
-    .digest("hex");
+  const expectedSignature =
+    crypto
+      .createHmac(
+        "sha256",
+        process.env
+          .RAZORPAY_KEY_SECRET
+      )
+      .update(
+        `${orderId}|${paymentId}`
+      )
+      .digest("hex");
 
   return safeCompareHex(
     expectedSignature,
@@ -337,13 +446,16 @@ function verifyRazorpaySignature({
   );
 }
 
-function requireRazorpay(res) {
+function requireRazorpay(
+  res
+) {
   if (
     !razorpayConfigured ||
     !razorpay
   ) {
     res.status(503).json({
       success: false,
+
       message:
         "Payment gateway is not configured",
     });
@@ -354,60 +466,178 @@ function requireRazorpay(res) {
   return true;
 }
 
+function createReceipt(
+  prefix = "ga"
+) {
+  return `${prefix}_${Date.now()}_${crypto
+    .randomBytes(4)
+    .toString("hex")}`;
+}
+
+/* ======================================================
+ * EVENT OWNERSHIP HELPERS
+ * ====================================================== */
+
+function normalizeEventOwnerType(
+  value
+) {
+  const normalized =
+    String(
+      value || ""
+    )
+      .trim()
+      .toLowerCase();
+
+  if (
+    [
+      "giveaura",
+      "giveaura-owned",
+      "giveaura_owned",
+      "platform",
+      "official",
+    ].includes(normalized)
+  ) {
+    return "giveaura";
+  }
+
+  return "external";
+}
+
+function calculateEventSplit({
+  grossAmount,
+  eventOwnerType,
+}) {
+  const gross =
+    roundMoney(
+      grossAmount
+    );
+
+  if (
+    eventOwnerType ===
+    "giveaura"
+  ) {
+    return {
+      grossAmount:
+        gross,
+
+      platformFeePercent:
+        100,
+
+      platformAmount:
+        gross,
+
+      organizerAmount:
+        0,
+    };
+  }
+
+  const platformAmount =
+    roundMoney(
+      gross *
+        (EXTERNAL_EVENT_PLATFORM_FEE_PERCENT /
+          100)
+    );
+
+  const organizerAmount =
+    roundMoney(
+      gross -
+        platformAmount
+    );
+
+  return {
+    grossAmount:
+      gross,
+
+    platformFeePercent:
+      EXTERNAL_EVENT_PLATFORM_FEE_PERCENT,
+
+    platformAmount,
+
+    organizerAmount,
+  };
+}
+
 /* ======================================================
  * HEALTH
  * ====================================================== */
 
-app.get("/", (_req, res) => {
-  return res.send(
-    "GiveAura payment server running"
-  );
-});
+app.get(
+  "/",
+  (_req, res) => {
+    return res.send(
+      "GiveAura payment server running"
+    );
+  }
+);
 
-app.get("/health", (_req, res) => {
-  return res.json({
-    ok: true,
-    service: "giveaura-payment-server",
-    razorpayConfigured,
-    timestamp: new Date().toISOString(),
-  });
-});
+app.get(
+  "/health",
+  (_req, res) => {
+    return res.json({
+      ok: true,
+
+      service:
+        "giveaura-payment-server",
+
+      razorpayConfigured,
+
+      eventBookingRoutes:
+        true,
+
+      timestamp:
+        new Date().toISOString(),
+    });
+  }
+);
 
 /* ======================================================
- * CREATE ORDER
+ * CREATE GENERIC ORDER
  *
- * IMPORTANT:
+ * Used for:
  *
- * At this stage this endpoint creates the Razorpay order.
+ * donation
+ * boost
+ * subscription
+ * giveaura-ad
  *
- * For donations, the NEXT backend update should make the
- * server load the campaign from Firestore and calculate
- * the authoritative payable amount itself.
+ * Event booking should use:
  *
- * Until that Firebase integration is added, the server
- * still receives the amount from the client.
+ * POST /api/payment/create-event-order
  * ====================================================== */
 
 app.post(
   "/api/payment/create-order",
+
   async (req, res) => {
     try {
-      if (!requireRazorpay(res)) {
+      if (
+        !requireRazorpay(res)
+      ) {
         return;
       }
 
       const {
         amount,
-        purpose = "donation",
-        campaignId = null,
+
+        purpose =
+          "donation",
+
+        campaignId =
+          null,
+
         meta = {},
-      } = req.body || {};
+      } =
+        req.body || {};
 
       const numericAmount =
-        normalizeAmount(amount);
+        normalizeAmount(
+          amount
+        );
 
       const normalizedPurpose =
-        normalizePurpose(purpose);
+        normalizePurpose(
+          purpose
+        );
 
       const normalizedCampaignId =
         normalizeString(
@@ -420,16 +650,22 @@ app.post(
        * ------------------------------------------ */
 
       if (
-        numericAmount === null ||
+        numericAmount ===
+          null ||
         numericAmount <
           MIN_PAYMENT_AMOUNT_INR ||
         numericAmount >
           MAX_PAYMENT_AMOUNT_INR
       ) {
-        return res.status(400).json({
-          success: false,
-          message: "Invalid payment amount",
-        });
+        return res
+          .status(400)
+          .json({
+            success:
+              false,
+
+            message:
+              "Invalid payment amount",
+          });
       }
 
       /* ------------------------------------------
@@ -441,15 +677,40 @@ app.post(
           normalizedPurpose
         )
       ) {
-        return res.status(400).json({
-          success: false,
-          message:
-            "Invalid payment purpose",
-        });
+        return res
+          .status(400)
+          .json({
+            success:
+              false,
+
+            message:
+              "Invalid payment purpose",
+          });
       }
 
       /* ------------------------------------------
-       * Donations require campaignId
+       * Event booking has dedicated endpoint
+       * ------------------------------------------ */
+
+      if (
+        normalizedPurpose ===
+          "event" ||
+        normalizedPurpose ===
+          "event-booking"
+      ) {
+        return res
+          .status(400)
+          .json({
+            success:
+              false,
+
+            message:
+              "Use /api/payment/create-event-order for event bookings",
+          });
+      }
+
+      /* ------------------------------------------
+       * Donation requires campaign
        * ------------------------------------------ */
 
       if (
@@ -457,15 +718,19 @@ app.post(
           "donation" &&
         !normalizedCampaignId
       ) {
-        return res.status(400).json({
-          success: false,
-          message:
-            "campaignId is required for donation payments",
-        });
+        return res
+          .status(400)
+          .json({
+            success:
+              false,
+
+            message:
+              "campaignId is required for donation payments",
+          });
       }
 
       /* ------------------------------------------
-       * Boosts also require campaignId
+       * Boost requires campaign
        * ------------------------------------------ */
 
       if (
@@ -473,127 +738,1024 @@ app.post(
           "boost" &&
         !normalizedCampaignId
       ) {
-        return res.status(400).json({
-          success: false,
-          message:
-            "campaignId is required for boost payments",
-        });
+        return res
+          .status(400)
+          .json({
+            success:
+              false,
+
+            message:
+              "campaignId is required for boost payments",
+          });
       }
 
       const cleanMeta =
         sanitizeNotes(meta);
 
       const amountPaise =
-        toPaise(numericAmount);
+        toPaise(
+          numericAmount
+        );
 
-      /*
-       * receipt must be <= Razorpay limits.
-       * Keep it compact and unique.
-       */
-      const receipt = `ga_${Date.now()}_${crypto
-        .randomBytes(4)
-        .toString("hex")}`;
+      const receipt =
+        createReceipt("ga");
 
       console.info(
         "[payment/create-order]",
         {
           purpose:
             normalizedPurpose,
+
           campaignId:
             normalizedCampaignId,
+
           amountPaise,
+
           receipt,
         }
       );
 
-      /* ------------------------------------------
-       * Create Razorpay order
-       * ------------------------------------------ */
-
       const order =
-        await razorpay.orders.create({
-          amount: amountPaise,
+        await razorpay.orders.create(
+          {
+            amount:
+              amountPaise,
 
-          currency: "INR",
+            currency:
+              "INR",
 
-          receipt,
+            receipt,
 
-          notes: {
-            purpose:
-              normalizedPurpose,
+            notes: {
+              purpose:
+                normalizedPurpose,
 
-            ...(normalizedCampaignId
-              ? {
-                  campaignId:
-                    normalizedCampaignId,
-                }
-              : {}),
+              ...(normalizedCampaignId
+                ? {
+                    campaignId:
+                      normalizedCampaignId,
+                  }
+                : {}),
 
-            ...cleanMeta,
-          },
+              ...cleanMeta,
+            },
+          }
+        );
+
+      return res
+        .status(200)
+        .json({
+          success: true,
+
+          key:
+            process.env
+              .RAZORPAY_KEY_ID,
+
+          orderId:
+            order.id,
+
+          amount:
+            order.amount,
+
+          currency:
+            order.currency ||
+            "INR",
+
+          receipt:
+            order.receipt ||
+            receipt,
+
+          purpose:
+            normalizedPurpose,
         });
-
-      return res.status(200).json({
-        success: true,
-
-        key:
-          process.env
-            .RAZORPAY_KEY_ID,
-
-        orderId:
-          order.id,
-
-        amount:
-          order.amount,
-
-        currency:
-          order.currency ||
-          "INR",
-
-        receipt:
-          order.receipt ||
-          receipt,
-
-        purpose:
-          normalizedPurpose,
-      });
     } catch (err) {
       console.error(
         "[payment/create-order] error:",
         err
       );
 
-      return res.status(500).json({
-        success: false,
-        message:
-          "Order creation failed",
-      });
+      return res
+        .status(500)
+        .json({
+          success: false,
+
+          message:
+            "Order creation failed",
+        });
+    }
+  }
+);
+
+/* ======================================================
+ * CREATE EVENT ORDER
+ *
+ * Endpoint expected by paymentService.js:
+ *
+ * POST /api/payment/create-event-order
+ *
+ * Current request supports:
+ *
+ * {
+ *   eventId,
+ *   quantity,
+ *   ticketPrice,
+ *   userId,
+ *   eventOwnerType,
+ *   organizerId,
+ *   eventTitle,
+ *   meta
+ * }
+ *
+ * IMPORTANT SECURITY NOTE:
+ *
+ * Until Firebase Admin is connected to this Render server,
+ * ticketPrice/event ownership still arrive from the client.
+ *
+ * Razorpay amount is fixed into the order and verified again
+ * during confirmation, but Firestore should eventually become
+ * the authoritative source for event price and ownership.
+ * ====================================================== */
+
+app.post(
+  "/api/payment/create-event-order",
+
+  async (req, res) => {
+    try {
+      if (
+        !requireRazorpay(res)
+      ) {
+        return;
+      }
+
+      const {
+        eventId,
+
+        quantity = 1,
+
+        ticketPrice,
+
+        amount,
+
+        userId = null,
+
+        eventOwnerType =
+          "external",
+
+        organizerId =
+          null,
+
+        eventTitle =
+          null,
+
+        meta = {},
+      } =
+        req.body || {};
+
+      const normalizedEventId =
+        normalizeString(
+          eventId,
+          200
+        );
+
+      if (
+        !normalizedEventId
+      ) {
+        return res
+          .status(400)
+          .json({
+            success:
+              false,
+
+            message:
+              "eventId is required",
+          });
+      }
+
+      const normalizedQuantity =
+        normalizeQuantity(
+          quantity
+        );
+
+      if (
+        !normalizedQuantity
+      ) {
+        return res
+          .status(400)
+          .json({
+            success:
+              false,
+
+            message:
+              "Invalid ticket quantity",
+          });
+      }
+
+      /*
+       * Support either:
+       *
+       * ticketPrice = price of one ticket
+       *
+       * OR
+       *
+       * amount = total amount
+       *
+       * ticketPrice is preferred.
+       */
+
+      let normalizedTicketPrice =
+        normalizeAmount(
+          ticketPrice
+        );
+
+      let grossAmount = null;
+
+      if (
+        normalizedTicketPrice !==
+          null &&
+        normalizedTicketPrice >=
+          MIN_PAYMENT_AMOUNT_INR
+      ) {
+        grossAmount =
+          roundMoney(
+            normalizedTicketPrice *
+              normalizedQuantity
+          );
+      } else {
+        grossAmount =
+          normalizeAmount(
+            amount
+          );
+
+        if (
+          grossAmount !==
+            null &&
+          grossAmount > 0
+        ) {
+          normalizedTicketPrice =
+            roundMoney(
+              grossAmount /
+                normalizedQuantity
+            );
+        }
+      }
+
+      if (
+        grossAmount ===
+          null ||
+        grossAmount <
+          MIN_PAYMENT_AMOUNT_INR ||
+        grossAmount >
+          MAX_PAYMENT_AMOUNT_INR
+      ) {
+        return res
+          .status(400)
+          .json({
+            success:
+              false,
+
+            message:
+              "Event payment amount must be greater than zero",
+          });
+      }
+
+      const normalizedOwnerType =
+        normalizeEventOwnerType(
+          eventOwnerType
+        );
+
+      const normalizedUserId =
+        normalizeString(
+          userId,
+          200
+        );
+
+      const normalizedOrganizerId =
+        normalizeString(
+          organizerId,
+          200
+        );
+
+      const normalizedEventTitle =
+        normalizeString(
+          eventTitle,
+          200
+        );
+
+      const split =
+        calculateEventSplit({
+          grossAmount,
+
+          eventOwnerType:
+            normalizedOwnerType,
+        });
+
+      const amountPaise =
+        toPaise(
+          grossAmount
+        );
+
+      const receipt =
+        createReceipt("gae");
+
+      const cleanMeta =
+        sanitizeNotes(meta);
+
+      console.info(
+        "[payment/create-event-order]",
+        {
+          eventId:
+            normalizedEventId,
+
+          quantity:
+            normalizedQuantity,
+
+          ticketPrice:
+            normalizedTicketPrice,
+
+          grossAmount,
+
+          amountPaise,
+
+          eventOwnerType:
+            normalizedOwnerType,
+
+          platformFeePercent:
+            split.platformFeePercent,
+
+          receipt,
+        }
+      );
+
+      const order =
+        await razorpay.orders.create(
+          {
+            amount:
+              amountPaise,
+
+            currency:
+              "INR",
+
+            receipt,
+
+            notes: {
+              purpose:
+                "event-booking",
+
+              eventId:
+                normalizedEventId,
+
+              quantity:
+                String(
+                  normalizedQuantity
+                ),
+
+              ticketPrice:
+                String(
+                  normalizedTicketPrice
+                ),
+
+              eventOwnerType:
+                normalizedOwnerType,
+
+              platformFeePercent:
+                String(
+                  split.platformFeePercent
+                ),
+
+              ...(normalizedUserId
+                ? {
+                    userId:
+                      normalizedUserId,
+                  }
+                : {}),
+
+              ...(normalizedOrganizerId
+                ? {
+                    organizerId:
+                      normalizedOrganizerId,
+                  }
+                : {}),
+
+              ...(normalizedEventTitle
+                ? {
+                    eventTitle:
+                      normalizedEventTitle,
+                  }
+                : {}),
+
+              ...cleanMeta,
+            },
+          }
+        );
+
+      return res
+        .status(200)
+        .json({
+          success: true,
+
+          key:
+            process.env
+              .RAZORPAY_KEY_ID,
+
+          orderId:
+            order.id,
+
+          amount:
+            order.amount,
+
+          currency:
+            order.currency ||
+            "INR",
+
+          receipt:
+            order.receipt ||
+            receipt,
+
+          purpose:
+            "event-booking",
+
+          event: {
+            eventId:
+              normalizedEventId,
+
+            title:
+              normalizedEventTitle,
+
+            quantity:
+              normalizedQuantity,
+
+            ticketPrice:
+              normalizedTicketPrice,
+
+            ownerType:
+              normalizedOwnerType,
+          },
+
+          breakdown: {
+            ticketPrice:
+              normalizedTicketPrice,
+
+            quantity:
+              normalizedQuantity,
+
+            grossAmount:
+              split.grossAmount,
+
+            platformFeePercent:
+              split.platformFeePercent,
+
+            platformAmount:
+              split.platformAmount,
+
+            organizerAmount:
+              split.organizerAmount,
+          },
+        });
+    } catch (err) {
+      console.error(
+        "[payment/create-event-order] error:",
+        err
+      );
+
+      return res
+        .status(500)
+        .json({
+          success: false,
+
+          message:
+            "Event order creation failed",
+        });
+    }
+  }
+);
+
+/* ======================================================
+ * CONFIRM EVENT BOOKING
+ *
+ * Endpoint expected by paymentService.js:
+ *
+ * POST /api/payment/confirm-event-booking
+ *
+ * This endpoint:
+ *
+ * 1. verifies Razorpay signature
+ * 2. fetches actual Razorpay payment
+ * 3. fetches actual Razorpay order
+ * 4. confirms payment belongs to order
+ * 5. confirms captured status
+ * 6. confirms INR
+ * 7. confirms order purpose = event-booking
+ * 8. confirms eventId
+ * 9. calculates trusted split from PAID amount
+ *
+ * External event:
+ * GiveAura = 12%
+ * Organizer = 88%
+ *
+ * GiveAura-owned:
+ * GiveAura = 100%
+ *
+ * NOTE:
+ * Firestore booking/accounting write is not performed here
+ * yet because Firebase Admin is not initialized in this
+ * standalone Render server.
+ * ====================================================== */
+
+app.post(
+  "/api/payment/confirm-event-booking",
+
+  async (req, res) => {
+    try {
+      if (
+        !requireRazorpay(res)
+      ) {
+        return;
+      }
+
+      const {
+        eventId,
+
+        paymentId,
+
+        orderId,
+
+        signature,
+
+        attendee = null,
+
+        userId = null,
+      } =
+        req.body || {};
+
+      const normalizedEventId =
+        normalizeString(
+          eventId,
+          200
+        );
+
+      const normalizedPaymentId =
+        normalizeString(
+          paymentId,
+          200
+        );
+
+      const normalizedOrderId =
+        normalizeString(
+          orderId,
+          200
+        );
+
+      const normalizedSignature =
+        normalizeString(
+          signature,
+          500
+        );
+
+      if (
+        !normalizedEventId ||
+        !normalizedPaymentId ||
+        !normalizedOrderId ||
+        !normalizedSignature
+      ) {
+        return res
+          .status(400)
+          .json({
+            success:
+              false,
+
+            message:
+              "eventId, paymentId, orderId and signature are required",
+          });
+      }
+
+      /* ------------------------------------------
+       * Verify signature
+       * ------------------------------------------ */
+
+      const signatureValid =
+        verifyRazorpaySignature({
+          orderId:
+            normalizedOrderId,
+
+          paymentId:
+            normalizedPaymentId,
+
+          signature:
+            normalizedSignature,
+        });
+
+      if (
+        !signatureValid
+      ) {
+        return res
+          .status(401)
+          .json({
+            success:
+              false,
+
+            valid:
+              false,
+
+            message:
+              "Invalid payment signature",
+          });
+      }
+
+      /* ------------------------------------------
+       * Fetch trusted Razorpay records
+       * ------------------------------------------ */
+
+      const [
+        payment,
+        order,
+      ] =
+        await Promise.all([
+          razorpay.payments.fetch(
+            normalizedPaymentId
+          ),
+
+          razorpay.orders.fetch(
+            normalizedOrderId
+          ),
+        ]);
+
+      if (!payment) {
+        return res
+          .status(404)
+          .json({
+            success:
+              false,
+
+            message:
+              "Payment not found",
+          });
+      }
+
+      if (!order) {
+        return res
+          .status(404)
+          .json({
+            success:
+              false,
+
+            message:
+              "Order not found",
+          });
+      }
+
+      /* ------------------------------------------
+       * Payment must belong to order
+       * ------------------------------------------ */
+
+      if (
+        String(
+          payment.order_id ||
+            ""
+        ) !==
+        normalizedOrderId
+      ) {
+        return res
+          .status(409)
+          .json({
+            success:
+              false,
+
+            message:
+              "Payment does not belong to this order",
+          });
+      }
+
+      /* ------------------------------------------
+       * Amount verification
+       * ------------------------------------------ */
+
+      const paymentAmount =
+        Number(
+          payment.amount ||
+            0
+        );
+
+      const orderAmount =
+        Number(
+          order.amount ||
+            0
+        );
+
+      if (
+        !paymentAmount ||
+        !orderAmount ||
+        paymentAmount !==
+          orderAmount
+      ) {
+        return res
+          .status(409)
+          .json({
+            success:
+              false,
+
+            message:
+              "Payment amount mismatch",
+          });
+      }
+
+      /* ------------------------------------------
+       * Currency verification
+       * ------------------------------------------ */
+
+      const paymentCurrency =
+        String(
+          payment.currency ||
+            ""
+        ).toUpperCase();
+
+      const orderCurrency =
+        String(
+          order.currency ||
+            ""
+        ).toUpperCase();
+
+      if (
+        paymentCurrency !==
+          "INR" ||
+        orderCurrency !==
+          "INR"
+      ) {
+        return res
+          .status(409)
+          .json({
+            success:
+              false,
+
+            message:
+              "Unexpected payment currency",
+          });
+      }
+
+      /* ------------------------------------------
+       * Captured payment required
+       * ------------------------------------------ */
+
+      if (
+        payment.status !==
+          "captured"
+      ) {
+        return res
+          .status(409)
+          .json({
+            success:
+              false,
+
+            message:
+              "Payment has not been captured",
+
+            paymentStatus:
+              payment.status ||
+              null,
+          });
+      }
+
+      const notes =
+        order.notes &&
+        typeof order.notes ===
+          "object"
+          ? order.notes
+          : {};
+
+      /* ------------------------------------------
+       * Verify event booking purpose
+       * ------------------------------------------ */
+
+      if (
+        String(
+          notes.purpose ||
+            ""
+        ) !==
+        "event-booking"
+      ) {
+        return res
+          .status(409)
+          .json({
+            success:
+              false,
+
+            message:
+              "Order is not an event booking order",
+          });
+      }
+
+      /* ------------------------------------------
+       * Verify eventId against Razorpay order
+       * ------------------------------------------ */
+
+      if (
+        String(
+          notes.eventId ||
+            ""
+        ) !==
+        normalizedEventId
+      ) {
+        return res
+          .status(409)
+          .json({
+            success:
+              false,
+
+            message:
+              "Event ID does not match payment order",
+          });
+      }
+
+      /* ------------------------------------------
+       * Read order metadata
+       * ------------------------------------------ */
+
+      const quantity =
+        normalizeQuantity(
+          notes.quantity ||
+            1
+        ) || 1;
+
+      const eventOwnerType =
+        normalizeEventOwnerType(
+          notes.eventOwnerType
+        );
+
+      /*
+       * Gross is derived from actual captured
+       * Razorpay amount, not from frontend.
+       */
+
+      const grossAmount =
+        fromPaise(
+          paymentAmount
+        );
+
+      const split =
+        calculateEventSplit({
+          grossAmount,
+
+          eventOwnerType,
+        });
+
+      const ticketPrice =
+        roundMoney(
+          grossAmount /
+            quantity
+        );
+
+      const bookingReference =
+        `GAB-${Date.now()
+          .toString(36)
+          .toUpperCase()}-${crypto
+          .randomBytes(3)
+          .toString("hex")
+          .toUpperCase()}`;
+
+      console.info(
+        "[payment/confirm-event-booking]",
+        {
+          eventId:
+            normalizedEventId,
+
+          paymentId:
+            normalizedPaymentId,
+
+          orderId:
+            normalizedOrderId,
+
+          quantity,
+
+          grossAmount,
+
+          eventOwnerType,
+
+          platformAmount:
+            split.platformAmount,
+
+          organizerAmount:
+            split.organizerAmount,
+
+          bookingReference,
+        }
+      );
+
+      return res
+        .status(200)
+        .json({
+          success: true,
+
+          valid: true,
+
+          bookingId:
+            bookingReference,
+
+          booking: {
+            bookingId:
+              bookingReference,
+
+            eventId:
+              normalizedEventId,
+
+            eventTitle:
+              notes.eventTitle ||
+              null,
+
+            quantity,
+
+            ticketPrice,
+
+            grossAmount,
+
+            currency:
+              "INR",
+
+            attendee:
+              attendee &&
+              typeof attendee ===
+                "object"
+                ? attendee
+                : null,
+
+            userId:
+              normalizeString(
+                userId,
+                200
+              ) ||
+              notes.userId ||
+              null,
+
+            organizerId:
+              notes.organizerId ||
+              null,
+
+            eventOwnerType,
+
+            paymentId:
+              normalizedPaymentId,
+
+            orderId:
+              normalizedOrderId,
+
+            paymentStatus:
+              payment.status,
+
+            bookingStatus:
+              "confirmed",
+
+            createdAt:
+              new Date().toISOString(),
+          },
+
+          split: {
+            grossAmount:
+              split.grossAmount,
+
+            platformFeePercent:
+              split.platformFeePercent,
+
+            giveAuraAmount:
+              split.platformAmount,
+
+            organizerAmount:
+              split.organizerAmount,
+          },
+
+          message:
+            "Event payment verified successfully",
+        });
+    } catch (err) {
+      console.error(
+        "[payment/confirm-event-booking] error:",
+        err
+      );
+
+      return res
+        .status(500)
+        .json({
+          success: false,
+
+          valid:
+            false,
+
+          message:
+            "Event booking confirmation failed",
+        });
     }
   }
 );
 
 /* ======================================================
  * VERIFY PAYMENT
- *
- * This endpoint:
- *
- * 1. verifies Razorpay signature
- * 2. fetches the actual Razorpay payment
- * 3. fetches the actual Razorpay order
- * 4. verifies payment belongs to order
- * 5. verifies amount/currency
- *
- * It DOES NOT yet write Firestore.
- *
- * Firestore accounting will be added in the next backend
- * update so that there is one authoritative transaction.
  * ====================================================== */
 
 app.post(
   "/api/payment/verify",
+
   async (req, res) => {
     try {
-      if (!requireRazorpay(res)) {
+      if (
+        !requireRazorpay(res)
+      ) {
         return;
       }
 
@@ -601,7 +1763,8 @@ app.post(
         paymentId,
         orderId,
         signature,
-      } = req.body || {};
+      } =
+        req.body || {};
 
       const normalizedPaymentId =
         normalizeString(
@@ -626,17 +1789,19 @@ app.post(
         !normalizedOrderId ||
         !normalizedSignature
       ) {
-        return res.status(400).json({
-          success: false,
-          valid: false,
-          message:
-            "paymentId, orderId and signature are required",
-        });
-      }
+        return res
+          .status(400)
+          .json({
+            success:
+              false,
 
-      /* ------------------------------------------
-       * Verify checkout signature
-       * ------------------------------------------ */
+            valid:
+              false,
+
+            message:
+              "paymentId, orderId and signature are required",
+          });
+      }
 
       const signatureValid =
         verifyRazorpaySignature({
@@ -650,82 +1815,98 @@ app.post(
             normalizedSignature,
         });
 
-      if (!signatureValid) {
-        return res.status(401).json({
-          success: false,
-          valid: false,
-          message:
-            "Invalid payment signature",
-        });
-      }
+      if (
+        !signatureValid
+      ) {
+        return res
+          .status(401)
+          .json({
+            success:
+              false,
 
-      /* ------------------------------------------
-       * Fetch trusted Razorpay records
-       * ------------------------------------------ */
+            valid:
+              false,
+
+            message:
+              "Invalid payment signature",
+          });
+      }
 
       const [
         payment,
         order,
-      ] = await Promise.all([
-        razorpay.payments.fetch(
-          normalizedPaymentId
-        ),
+      ] =
+        await Promise.all([
+          razorpay.payments.fetch(
+            normalizedPaymentId
+          ),
 
-        razorpay.orders.fetch(
-          normalizedOrderId
-        ),
-      ]);
+          razorpay.orders.fetch(
+            normalizedOrderId
+          ),
+        ]);
 
       if (!payment) {
-        return res.status(404).json({
-          success: false,
-          valid: false,
-          message:
-            "Payment not found",
-        });
+        return res
+          .status(404)
+          .json({
+            success:
+              false,
+
+            valid:
+              false,
+
+            message:
+              "Payment not found",
+          });
       }
 
       if (!order) {
-        return res.status(404).json({
-          success: false,
-          valid: false,
-          message:
-            "Order not found",
-        });
-      }
+        return res
+          .status(404)
+          .json({
+            success:
+              false,
 
-      /* ------------------------------------------
-       * Ensure payment belongs to order
-       * ------------------------------------------ */
+            valid:
+              false,
+
+            message:
+              "Order not found",
+          });
+      }
 
       if (
         String(
-          payment.order_id || ""
+          payment.order_id ||
+            ""
         ) !==
-        String(
-          normalizedOrderId
-        )
+        normalizedOrderId
       ) {
-        return res.status(409).json({
-          success: false,
-          valid: false,
-          message:
-            "Payment does not belong to this order",
-        });
-      }
+        return res
+          .status(409)
+          .json({
+            success:
+              false,
 
-      /* ------------------------------------------
-       * Verify amount
-       * ------------------------------------------ */
+            valid:
+              false,
+
+            message:
+              "Payment does not belong to this order",
+          });
+      }
 
       const paymentAmount =
         Number(
-          payment.amount || 0
+          payment.amount ||
+            0
         );
 
       const orderAmount =
         Number(
-          order.amount || 0
+          order.amount ||
+            0
         );
 
       if (
@@ -734,60 +1915,72 @@ app.post(
         paymentAmount !==
           orderAmount
       ) {
-        return res.status(409).json({
-          success: false,
-          valid: false,
-          message:
-            "Payment amount mismatch",
-        });
-      }
+        return res
+          .status(409)
+          .json({
+            success:
+              false,
 
-      /* ------------------------------------------
-       * Verify currency
-       * ------------------------------------------ */
+            valid:
+              false,
+
+            message:
+              "Payment amount mismatch",
+          });
+      }
 
       const paymentCurrency =
         String(
-          payment.currency || ""
+          payment.currency ||
+            ""
         ).toUpperCase();
 
       const orderCurrency =
         String(
-          order.currency || ""
+          order.currency ||
+            ""
         ).toUpperCase();
 
       if (
-        paymentCurrency !== "INR" ||
-        orderCurrency !== "INR"
+        paymentCurrency !==
+          "INR" ||
+        orderCurrency !==
+          "INR"
       ) {
-        return res.status(409).json({
-          success: false,
-          valid: false,
-          message:
-            "Unexpected payment currency",
-        });
+        return res
+          .status(409)
+          .json({
+            success:
+              false,
+
+            valid:
+              false,
+
+            message:
+              "Unexpected payment currency",
+          });
       }
 
-      /*
-       * With payment_capture enabled, Razorpay normally
-       * captures automatically.
-       *
-       * We accept only captured payments as successful
-       * accounting candidates.
-       */
       if (
         payment.status !==
-        "captured"
+          "captured"
       ) {
-        return res.status(409).json({
-          success: false,
-          valid: false,
-          message:
-            "Payment has not been captured",
-          paymentStatus:
-            payment.status ||
-            null,
-        });
+        return res
+          .status(409)
+          .json({
+            success:
+              false,
+
+            valid:
+              false,
+
+            message:
+              "Payment has not been captured",
+
+            paymentStatus:
+              payment.status ||
+              null,
+          });
       }
 
       const notes =
@@ -797,116 +1990,127 @@ app.post(
           ? order.notes
           : {};
 
-      return res.status(200).json({
-        success: true,
+      return res
+        .status(200)
+        .json({
+          success: true,
 
-        valid: true,
+          valid: true,
 
-        payment: {
-          paymentId:
-            payment.id,
+          payment: {
+            paymentId:
+              payment.id,
 
-          orderId:
-            normalizedOrderId,
+            orderId:
+              normalizedOrderId,
 
-          amount:
-            paymentAmount,
+            amount:
+              paymentAmount,
 
-          amountRupees:
-            paymentAmount / 100,
+            amountRupees:
+              paymentAmount /
+              100,
 
-          currency:
-            paymentCurrency,
+            currency:
+              paymentCurrency,
 
-          status:
-            payment.status,
+            status:
+              payment.status,
 
-          method:
-            payment.method ||
-            null,
+            method:
+              payment.method ||
+              null,
 
-          captured:
-            payment.captured ===
-            true,
+            captured:
+              payment.captured ===
+              true,
 
-          createdAt:
-            payment.created_at ||
-            null,
-        },
+            createdAt:
+              payment.created_at ||
+              null,
+          },
 
-        order: {
-          orderId:
-            order.id,
+          order: {
+            orderId:
+              order.id,
 
-          amount:
-            orderAmount,
+            amount:
+              orderAmount,
 
-          amountRupees:
-            orderAmount / 100,
+            amountRupees:
+              orderAmount /
+              100,
 
-          currency:
-            orderCurrency,
+            currency:
+              orderCurrency,
 
-          status:
-            order.status ||
-            null,
+            status:
+              order.status ||
+              null,
 
-          purpose:
-            notes.purpose ||
-            null,
+            purpose:
+              notes.purpose ||
+              null,
 
-          campaignId:
-            notes.campaignId ||
-            null,
+            campaignId:
+              notes.campaignId ||
+              null,
 
-          notes,
-        },
-      });
+            eventId:
+              notes.eventId ||
+              null,
+
+            notes,
+          },
+        });
     } catch (err) {
       console.error(
         "[payment/verify] error:",
         err
       );
 
-      return res.status(500).json({
-        success: false,
-        valid: false,
-        message:
-          "Payment verification failed",
-      });
+      return res
+        .status(500)
+        .json({
+          success: false,
+
+          valid:
+            false,
+
+          message:
+            "Payment verification failed",
+        });
     }
   }
 );
 
 /* ======================================================
- * LEGACY VERIFY-SIGNATURE ENDPOINT
- *
- * Kept temporarily so existing frontend code does not
- * immediately break.
- *
- * New code should use:
- *
- * POST /api/payment/verify
+ * LEGACY VERIFY SIGNATURE
  * ====================================================== */
 
 app.post(
   "/api/payment/verify-signature",
+
   async (req, res) => {
     try {
       const {
         paymentId,
         orderId,
         signature,
-      } = req.body || {};
+      } =
+        req.body || {};
 
       if (
         !paymentId ||
         !orderId ||
         !signature
       ) {
-        return res.status(400).json({
-          valid: false,
-        });
+        return res
+          .status(400)
+          .json({
+            valid:
+              false,
+          });
       }
 
       const valid =
@@ -916,20 +2120,27 @@ app.post(
           signature,
         });
 
-      return res.status(
-        valid ? 200 : 401
-      ).json({
-        valid,
-      });
+      return res
+        .status(
+          valid
+            ? 200
+            : 401
+        )
+        .json({
+          valid,
+        });
     } catch (err) {
       console.error(
         "[verify-signature] error:",
         err
       );
 
-      return res.status(500).json({
-        valid: false,
-      });
+      return res
+        .status(500)
+        .json({
+          valid:
+            false,
+        });
     }
   }
 );
@@ -938,33 +2149,55 @@ app.post(
  * 404
  * ====================================================== */
 
-app.use((req, res) => {
-  return res.status(404).json({
-    success: false,
-    message: "Route not found",
-  });
-});
+app.use(
+  (req, res) => {
+    return res
+      .status(404)
+      .json({
+        success: false,
+
+        message:
+          "Route not found",
+
+        path:
+          req.originalUrl,
+
+        method:
+          req.method,
+      });
+  }
+);
 
 /* ======================================================
  * GLOBAL ERROR HANDLER
  * ====================================================== */
 
 app.use(
-  (err, req, res, next) => {
+  (
+    err,
+    req,
+    res,
+    next
+  ) => {
     console.error(
       "[server] unhandled error:",
       err
     );
 
-    if (res.headersSent) {
+    if (
+      res.headersSent
+    ) {
       return next(err);
     }
 
-    return res.status(500).json({
-      success: false,
-      message:
-        "Internal server error",
-    });
+    return res
+      .status(500)
+      .json({
+        success: false,
+
+        message:
+          "Internal server error",
+      });
   }
 );
 
@@ -972,16 +2205,31 @@ app.use(
  * START SERVER
  * ====================================================== */
 
-app.listen(PORT, () => {
-  console.log(
-    `GiveAura payment server running on port ${PORT}`
-  );
+app.listen(
+  PORT,
+  () => {
+    console.log(
+      `GiveAura payment server running on port ${PORT}`
+    );
 
-  console.log(
-    `Razorpay configured: ${
-      razorpayConfigured
-        ? "YES"
-        : "NO"
-    }`
-  );
-});
+    console.log(
+      `Razorpay configured: ${
+        razorpayConfigured
+          ? "YES"
+          : "NO"
+      }`
+    );
+
+    console.log(
+      "Event payment routes: ENABLED"
+    );
+
+    console.log(
+      "POST /api/payment/create-event-order"
+    );
+
+    console.log(
+      "POST /api/payment/confirm-event-booking"
+    );
+  }
+);
