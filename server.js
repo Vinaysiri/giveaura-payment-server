@@ -2812,9 +2812,6 @@ app.post(
 
       /* --------------------------------------------------
        * READ TRUSTED RAZORPAY ORDER NOTES
-       *
-       * These were written when the order was created.
-       * Client values are NOT trusted for accounting.
        * -------------------------------------------------- */
 
       const orderNotes =
@@ -3163,11 +3160,6 @@ app.post(
 
           /* ----------------------------------------------
            * CAMPAIGN FUNDS
-           *
-           * Only the beneficiary donation amount is added
-           * to funds raised.
-           *
-           * GiveAura support is NOT campaign funds.
            * ---------------------------------------------- */
 
           const currentFundsRaised =
