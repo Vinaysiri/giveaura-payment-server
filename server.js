@@ -2620,6 +2620,623 @@ app.post(
   }
 );
 
+/* ======================================================
+ * CONFIRM DONATION
+ *
+ * Server verifies:
+ *
+ * 1. Razorpay signature
+ * 2. Razorpay payment
+ * 3. Razorpay order
+ * 4. payment/order relationship
+ * 5. captured payment status
+ * 6. INR currency
+ * 7. donation amount
+ * 8. GiveAura support selection
+ * 9. campaign existence
+ *
+ * Then writes the donation/accounting transaction.
+ * ====================================================== */
+
+app.post(
+  "/api/payment/confirm-donation",
+
+  async (req, res) => {
+    try {
+      if (!requireRazorpay(res)) {
+        return;
+      }
+
+      if (!requireFirebaseAdmin(res)) {
+        return;
+      }
+
+      const {
+        campaignId,
+        paymentId,
+        orderId,
+        signature,
+        donationAmount,
+        supportType = "percent",
+        supportPercent = null,
+        supportAmount = null,
+        donor = {},
+        meta = {},
+      } = req.body || {};
+
+      const cid = normalizeString(
+        campaignId,
+        200
+      );
+
+      const pid = normalizeString(
+        paymentId,
+        200
+      );
+
+      const oid = normalizeString(
+        orderId,
+        200
+      );
+
+      const sig = normalizeString(
+        signature,
+        500
+      );
+
+      const baseDonationAmount =
+        normalizeAmount(
+          donationAmount
+        );
+
+      if (
+        !cid ||
+        !pid ||
+        !oid ||
+        !sig ||
+        baseDonationAmount === null
+      ) {
+        return res.status(400).json({
+          success: false,
+          valid: false,
+          message:
+            "campaignId, paymentId, orderId, signature and donationAmount are required",
+        });
+      }
+
+      if (
+        baseDonationAmount <
+          MIN_PAYMENT_AMOUNT_INR ||
+        baseDonationAmount >
+          MAX_PAYMENT_AMOUNT_INR
+      ) {
+        return res.status(400).json({
+          success: false,
+          valid: false,
+          message:
+            "Invalid donation amount",
+        });
+      }
+
+      /* --------------------------------------------------
+       * VERIFY RAZORPAY SIGNATURE
+       * -------------------------------------------------- */
+
+      const signatureValid =
+        verifyRazorpaySignature({
+          orderId: oid,
+          paymentId: pid,
+          signature: sig,
+        });
+
+      if (!signatureValid) {
+        return res.status(401).json({
+          success: false,
+          valid: false,
+          message:
+            "Invalid payment signature",
+        });
+      }
+
+      /* --------------------------------------------------
+       * FETCH PAYMENT + ORDER FROM RAZORPAY
+       * -------------------------------------------------- */
+
+      const [
+        payment,
+        order,
+      ] = await Promise.all([
+        razorpay.payments.fetch(pid),
+        razorpay.orders.fetch(oid),
+      ]);
+
+      if (
+        !payment ||
+        !order ||
+        String(
+          payment.order_id || ""
+        ) !== oid
+      ) {
+        return res.status(409).json({
+          success: false,
+          valid: false,
+          message:
+            "Payment/order verification failed",
+        });
+      }
+
+      /* --------------------------------------------------
+       * VERIFY PAYMENT AMOUNT / CURRENCY / STATUS
+       * -------------------------------------------------- */
+
+      const paymentAmountPaise =
+        Number(
+          payment.amount || 0
+        );
+
+      const orderAmountPaise =
+        Number(
+          order.amount || 0
+        );
+
+      const expectedDonationPaise =
+        toPaise(
+          baseDonationAmount
+        );
+
+      const paymentCurrency =
+        String(
+          payment.currency || ""
+        ).toUpperCase();
+
+      const orderCurrency =
+        String(
+          order.currency || ""
+        ).toUpperCase();
+
+      if (
+        !paymentAmountPaise ||
+        paymentAmountPaise !==
+          orderAmountPaise ||
+        paymentCurrency !== "INR" ||
+        orderCurrency !== "INR" ||
+        payment.status !== "captured"
+      ) {
+        return res.status(409).json({
+          success: false,
+          valid: false,
+          message:
+            "Payment is not a valid captured INR payment for this order",
+        });
+      }
+
+      /* --------------------------------------------------
+       * READ TRUSTED RAZORPAY ORDER NOTES
+       *
+       * These were written when the order was created.
+       * Client values are NOT trusted for accounting.
+       * -------------------------------------------------- */
+
+      const orderNotes =
+        order.notes &&
+        typeof order.notes === "object"
+          ? order.notes
+          : {};
+
+      if (
+        String(
+          orderNotes.purpose || ""
+        ) !== "donation" ||
+        String(
+          orderNotes.campaignId || ""
+        ) !== cid
+      ) {
+        return res.status(409).json({
+          success: false,
+          valid: false,
+          message:
+            "Order does not match this donation campaign",
+        });
+      }
+
+      /* --------------------------------------------------
+       * TRUST SUPPORT INFORMATION FROM ORDER NOTES
+       * -------------------------------------------------- */
+
+      const trustedSupportType =
+        String(
+          orderNotes.supportType ||
+            supportType ||
+            "percent"
+        )
+          .trim()
+          .toLowerCase();
+
+      const trustedSupportPercent =
+        orderNotes.supportPercent !==
+        undefined
+          ? Number(
+              orderNotes.supportPercent
+            )
+          : supportPercent;
+
+      const trustedSupportAmount =
+        orderNotes.supportAmount !==
+        undefined
+          ? Number(
+              orderNotes.supportAmount
+            )
+          : supportAmount;
+
+      /* --------------------------------------------------
+       * LOAD CAMPAIGN
+       * -------------------------------------------------- */
+
+      const campaignRef =
+        adminDb
+          .collection("campaigns")
+          .doc(cid);
+
+      const campaignSnap =
+        await campaignRef.get();
+
+      if (!campaignSnap.exists) {
+        return res.status(404).json({
+          success: false,
+          valid: false,
+          message:
+            "Campaign not found",
+        });
+      }
+
+      const campaign =
+        campaignSnap.data() || {};
+
+      /* --------------------------------------------------
+       * CALCULATE SERVER-SIDE BREAKDOWN
+       * -------------------------------------------------- */
+
+      const breakdown =
+        calculateDonationBreakdown({
+          baseDonationAmount,
+          supportType:
+            trustedSupportType,
+          supportPercent:
+            trustedSupportPercent,
+          supportAmount:
+            trustedSupportAmount,
+          campaign,
+        });
+
+      /* --------------------------------------------------
+       * VERIFY THE ACTUAL RAZORPAY TOTAL
+       *
+       * IMPORTANT:
+       * Razorpay amount is in paise.
+       * -------------------------------------------------- */
+
+      const expectedTotalPaise =
+        toPaise(
+          breakdown.totalPaid
+        );
+
+      if (
+        paymentAmountPaise !==
+          expectedTotalPaise
+      ) {
+        return res.status(409).json({
+          success: false,
+          valid: false,
+          message:
+            "Paid amount does not match the server donation calculation",
+        });
+      }
+
+      /* --------------------------------------------------
+       * IDEMPOTENT PAYMENT LEDGER
+       * -------------------------------------------------- */
+
+      const ledgerRef =
+        adminDb
+          .collection("paymentLedger")
+          .doc(pid);
+
+      const existingLedger =
+        await ledgerRef.get();
+
+      if (existingLedger.exists) {
+        const existing =
+          existingLedger.data() || {};
+
+        if (
+          existing.purpose !==
+            "donation" ||
+          existing.campaignId !== cid
+        ) {
+          return res.status(409).json({
+            success: false,
+            valid: false,
+            message:
+              "Payment has already been used for another transaction",
+          });
+        }
+
+        return res.status(200).json({
+          success: true,
+          valid: true,
+          alreadyProcessed: true,
+          paymentId: pid,
+          breakdown:
+            existing.breakdown ||
+            breakdown,
+          message:
+            "Donation was already confirmed",
+        });
+      }
+
+      /* --------------------------------------------------
+       * DONOR DATA
+       * -------------------------------------------------- */
+
+      const normalizedDonor = {
+        name:
+          normalizeString(
+            donor?.name,
+            150
+          ) || "",
+
+        email:
+          String(
+            normalizeString(
+              donor?.email,
+              200
+            ) || ""
+          ).toLowerCase(),
+
+        phone:
+          normalizeString(
+            donor?.phone,
+            50
+          ) || "",
+      };
+
+      /* --------------------------------------------------
+       * TRANSACTIONAL ACCOUNTING
+       * -------------------------------------------------- */
+
+      const donationRef =
+        adminDb
+          .collection("donations")
+          .doc();
+
+      const serverTimestamp =
+        admin.firestore.FieldValue
+          .serverTimestamp();
+
+      await adminDb.runTransaction(
+        async (tx) => {
+          const [
+            freshCampaignSnap,
+            freshLedgerSnap,
+          ] = await Promise.all([
+            tx.get(campaignRef),
+            tx.get(ledgerRef),
+          ]);
+
+          if (freshLedgerSnap.exists) {
+            return;
+          }
+
+          if (!freshCampaignSnap.exists) {
+            throw new Error(
+              "Campaign not found"
+            );
+          }
+
+          const freshCampaign =
+            freshCampaignSnap.data() ||
+            {};
+
+          const freshBreakdown =
+            calculateDonationBreakdown({
+              baseDonationAmount,
+              supportType:
+                trustedSupportType,
+              supportPercent:
+                trustedSupportPercent,
+              supportAmount:
+                trustedSupportAmount,
+              campaign:
+                freshCampaign,
+            });
+
+          /* ----------------------------------------------
+           * CREATE DONATION
+           * ---------------------------------------------- */
+
+          tx.set(
+            donationRef,
+            {
+              donationId:
+                donationRef.id,
+
+              campaignId: cid,
+
+              donor:
+                normalizedDonor,
+
+              paymentId: pid,
+
+              orderId: oid,
+
+              amount:
+                freshBreakdown
+                  .baseDonationAmount,
+
+              donationAmount:
+                freshBreakdown
+                  .baseDonationAmount,
+
+              donorSupportType:
+                freshBreakdown
+                  .supportType,
+
+              donorSupportPercent:
+                freshBreakdown
+                  .donorSupportPercent,
+
+              donorSupportAmount:
+                freshBreakdown
+                  .donorSupportAmount,
+
+              categoryFeePercent:
+                freshBreakdown
+                  .categoryFeePercent,
+
+              categoryFeeAmount:
+                freshBreakdown
+                  .categoryFeeAmount,
+
+              beneficiaryNetAmount:
+                freshBreakdown
+                  .beneficiaryNetAmount,
+
+              giveAuraRevenue:
+                freshBreakdown
+                  .giveAuraRevenue,
+
+              totalPaid:
+                freshBreakdown
+                  .totalPaid,
+
+              currency: "INR",
+
+              paymentStatus:
+                "captured",
+
+              status:
+                "completed",
+
+              createdAt:
+                serverTimestamp,
+
+              updatedAt:
+                serverTimestamp,
+
+              meta:
+                sanitizeNotes(meta),
+            }
+          );
+
+          /* ----------------------------------------------
+           * PAYMENT LEDGER
+           * ---------------------------------------------- */
+
+          tx.set(
+            ledgerRef,
+            {
+              paymentId: pid,
+
+              orderId: oid,
+
+              purpose: "donation",
+
+              campaignId: cid,
+
+              donationId:
+                donationRef.id,
+
+              amountPaise:
+                paymentAmountPaise,
+
+              currency: "INR",
+
+              status: "captured",
+
+              breakdown:
+                freshBreakdown,
+
+              createdAt:
+                serverTimestamp,
+            }
+          );
+
+          /* ----------------------------------------------
+           * CAMPAIGN FUNDS
+           *
+           * Only the beneficiary donation amount is added
+           * to funds raised.
+           *
+           * GiveAura support is NOT campaign funds.
+           * ---------------------------------------------- */
+
+          const currentFundsRaised =
+            Number(
+              freshCampaign
+                .fundsRaised || 0
+            );
+
+          const currentDonationCount =
+            Number(
+              freshCampaign
+                .donationCount || 0
+            );
+
+          tx.update(
+            campaignRef,
+            {
+              fundsRaised:
+                roundMoney(
+                  currentFundsRaised +
+                    freshBreakdown
+                      .beneficiaryNetAmount
+                ),
+
+              donationCount:
+                currentDonationCount +
+                1,
+
+              updatedAt:
+                serverTimestamp,
+            }
+          );
+        }
+      );
+
+      return res.status(200).json({
+        success: true,
+
+        valid: true,
+
+        alreadyProcessed: false,
+
+        donationId:
+          donationRef.id,
+
+        paymentId: pid,
+
+        breakdown,
+
+        message:
+          "Donation confirmed successfully",
+      });
+    } catch (error) {
+      console.error(
+        "[payment/confirm-donation] error:",
+        error
+      );
+
+      return res.status(500).json({
+        success: false,
+        valid: false,
+        message:
+          error?.message ||
+          "Donation confirmation failed",
+      });
+    }
+  }
+);
+
 
 /* ======================================================
  * 404
